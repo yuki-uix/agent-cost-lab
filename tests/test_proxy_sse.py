@@ -109,6 +109,36 @@ def test_client_disconnect_propagates_and_still_records(servers):
     assert len(_records(servers)) == before + 1, "aborted stream vanished from ledger"
 
 
+def test_serialiser_is_byte_faithful_on_non_ascii():
+    """Regression: default json.dumps escaped CJK and grew a payload by 39%."""
+    from agentcostlab.proxy import serialise
+
+    original = ('{"model":"claude-opus-5","system":"你是一个测试助手",'
+                '"messages":[{"role":"user","content":"帮我修一下 billing 里的 bug"}]}')
+    out = serialise(json.loads(original))
+    assert out == original.encode(), "proxy rewrote the payload it is measuring"
+    assert b"\\u" not in out
+
+
+def test_non_ascii_reaches_upstream_intact(servers):
+    cjk = {**BODY, "system": "你是一个测试助手",
+           "messages": [{"role": "user", "content": "帮我修一下 billing 里的 bug"}]}
+
+    async def run():
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            async with c.stream("POST", f"{PROXY}/v1/messages", json=cjk) as r:
+                async for _ in r.aiter_lines():
+                    pass
+
+    asyncio.run(run())
+    seen = httpx.get(f"{UPSTREAM}/_last", timeout=5).json()
+    assert seen["last_body"]["system"] == "你是一个测试助手"
+    rec = _records(servers)[-1]
+    # Only the injected diagnostics field should account for the growth.
+    overhead = rec["request_bytes"] - rec["client_bytes"]
+    assert overhead < 80, f"unexplained growth of {overhead} bytes"
+
+
 def test_captured_record_passes_the_export_gate(servers):
     """Two-way check: a new capture field with no redact Policy fails here."""
     from agentcostlab.redact import redact

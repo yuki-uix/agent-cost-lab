@@ -29,6 +29,7 @@ POLICIES: dict[str, Policy] = {
     "t_end": Policy.KEEP,
     "provider": Policy.KEEP,
     "model": Policy.KEEP,
+    "client_bytes": Policy.KEEP,
     "request_bytes": Policy.KEEP,
     "first_byte_ms": Policy.KEEP,
     "usage": Policy.KEEP,

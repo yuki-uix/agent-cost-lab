@@ -45,6 +45,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+def serialise(body: dict) -> bytes:
+    """Re-emit a request body without rewriting it.
+
+    The default json.dumps escapes non-ASCII to \\uXXXX and pads separators,
+    which inflated a CJK payload by 39% in testing. An instrument that silently
+    rewrites its subject is worse than no instrument, so both settings are
+    load-bearing, not style.
+    """
+    return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+
+
 def _inject_diagnostics(body: dict, headers: dict) -> None:
     """Opt in to Anthropic cache diagnostics on EVERY turn.
 
@@ -67,12 +78,13 @@ async def messages(request: Request):
     if PROVIDER == "anthropic":
         _inject_diagnostics(body, headers)
 
-    payload = json.dumps(body).encode()
+    payload = serialise(body)
     t0 = time.perf_counter()
     record: dict = {
         "t_start": time.time(),
         "provider": PROVIDER,
         "model": body.get("model"),
+        "client_bytes": len(raw),
         "request_bytes": len(payload),
         "injected_previous_message_id": LAST_ID["id"],
         "request_body": body,

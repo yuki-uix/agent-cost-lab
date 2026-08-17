@@ -1,0 +1,40 @@
+{
+  "_README": "USD per million tokens. Fill each entry from the OFFICIAL pricing page, set retrieved_at, then flip verified to true. cost() refuses to run on verified:false. Do not copy rates out of blog posts — that is exactly the second-hand-number problem this repo is about.",
+
+  "anthropic/claude-opus-5": {
+    "input_uncached": 0.0,
+    "cache_read": 0.0,
+    "cache_write": 0.0,
+    "output": 0.0,
+    "source": "TODO https://www.anthropic.com/pricing",
+    "retrieved_at": "2026-08-17",
+    "verified": false
+  },
+  "anthropic/claude-haiku-4-5": {
+    "input_uncached": 0.0,
+    "cache_read": 0.0,
+    "cache_write": 0.0,
+    "output": 0.0,
+    "source": "TODO https://www.anthropic.com/pricing",
+    "retrieved_at": "2026-08-17",
+    "verified": false
+  },
+  "deepseek/deepseek-chat": {
+    "input_uncached": 0.0,
+    "cache_read": 0.0,
+    "cache_write": 0.0,
+    "output": 0.0,
+    "source": "TODO https://api-docs.deepseek.com/quick_start/pricing",
+    "retrieved_at": "2026-08-17",
+    "verified": false
+  },
+  "openai/gpt-5.5": {
+    "input_uncached": 0.0,
+    "cache_read": 0.0,
+    "cache_write": 0.0,
+    "output": 0.0,
+    "source": "TODO https://openai.com/api/pricing/",
+    "retrieved_at": "2026-08-17",
+    "verified": false
+  }
+}

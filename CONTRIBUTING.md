@@ -43,11 +43,26 @@ member fails the suite until it is registered everywhere.
 ## predictions.md is append-only once locked
 
 Predictions are committed before the data they refer to exists; that ordering in
-git history is the entire evidential value. Once locked:
+git history is the entire evidential value. Once locked, the rule is an
+allowlist, not a list of protected columns:
 
-- never edit a `predicted` cell
-- never delete a row because it turned out wrong
-- fill `actual` and `verdict` only
+- **`actual` and `verdict` are the only writable cells.** Everything else is
+  frozen: `predicted`, `Falsified if`, operational definitions, reasoning prose,
+  confidence ranking, kill criteria.
+- Never delete a row because it turned out wrong.
+- Only two additions are permitted: **new rows** (with their confidence ranking
+  in the same commit), and **dated errata notes** appended to the Errata section.
+- Errors found after locking are corrected by appending an erratum, never by
+  editing the original in place. The wrong text stands, with the correction
+  beside it.
+
+Stated as an allowlist deliberately. Guarding `predicted` by name still leaves
+room to widen a falsification band, or reword a scoring rule that lives in
+prose, after the result is known — the same escape hatch one cell over.
+
+The errata route is not a loophole, it is what stops one forming: a freeze with
+no lawful way to fix a mistake gets violated silently, which destroys more
+evidential value than the mistake would have.
 
 A wrong prediction with intact history is worth more than a right one with an
 ambiguous timestamp.

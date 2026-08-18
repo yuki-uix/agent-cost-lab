@@ -4,6 +4,8 @@ the suite is offline, repeatable, and independent of ``data/raw/``.
 """
 from __future__ import annotations
 
+import importlib.util
+import itertools
 import json
 from pathlib import Path
 
@@ -18,6 +20,10 @@ from agentcostlab.attribute import (
 )
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "attribution"
+
+# Every permutation of COMPONENTS: the segment order is a swept hypothesis, and
+# the suppression decision must be invariant across all of them (AC1/AC3/AC4).
+ALL_ORDERS = list(itertools.permutations(COMPONENTS))
 
 
 def _load_fixtures():
@@ -289,8 +295,30 @@ def test_attributor_and_proxy_share_one_encoder():
 # non-cached tail and must be suppressed (returned with suppressed=True, not as
 # a break) — but *only* that case. These six pin the boundary so the rule cannot
 # be widened into silence. The first five must still report; the last must not.
+# The suppression decision is structural in CACHE_LAYOUT, so every one of these
+# holds under *all* 120 segment orders, not just the default.
 
 _CTRL = {"type": "ephemeral"}
+
+
+def _assert_break_under_all_orders(prev, curr, component):
+    """The one diverging component reports as a cache *break* under every order."""
+    for order in ALL_ORDERS:
+        result = attribute(prev, curr, order=order)
+        assert result is not None, f"{component}: no divergence under {order}"
+        assert result.component == component, f"{component}: got {result.component} under {order}"
+        assert not result.suppressed, f"{component}: suppressed under {order}"
+    return attribute(prev, curr)
+
+
+def _assert_suppressed_under_all_orders(prev, curr, component):
+    """The one diverging component reports *suppressed* under every order."""
+    for order in ALL_ORDERS:
+        result = attribute(prev, curr, order=order)
+        assert result is not None, f"{component}: no divergence under {order}"
+        assert result.component == component, f"{component}: got {result.component} under {order}"
+        assert result.suppressed, f"{component}: not suppressed under {order}"
+    return attribute(prev, curr)
 
 
 def test_change_before_breakpoint_is_a_break():
@@ -305,10 +333,7 @@ def test_change_before_breakpoint_is_a_break():
         {"role": "assistant", "content": [{"type": "text", "text": "answer", "cache_control": _CTRL}]},
         {"role": "user", "content": "next"},
     ]}
-    result = attribute(prev, curr)
-    assert result is not None
-    assert not result.suppressed
-    assert result.component == "messages"
+    result = _assert_break_under_all_orders(prev, curr, "messages")
     assert result.path[:2] == ["messages", 0]
 
 
@@ -324,10 +349,7 @@ def test_change_in_breakpoint_block_is_a_break():
         {"role": "assistant", "content": [{"type": "text", "text": "answer B", "cache_control": _CTRL}]},
         {"role": "user", "content": "next"},
     ]}
-    result = attribute(prev, curr)
-    assert result is not None
-    assert not result.suppressed
-    assert result.component == "messages"
+    result = _assert_break_under_all_orders(prev, curr, "messages")
     assert result.path[:4] == ["messages", 1, "content", 0]
 
 
@@ -335,10 +357,7 @@ def test_change_with_no_breakpoint_is_a_break():
     """A request with no cache_control marker has no breakpoint to hide behind."""
     prev = {"model": "a", "max_tokens": 1, "messages": [{"role": "user", "content": "a"}]}
     curr = {"model": "a", "max_tokens": 1, "messages": [{"role": "user", "content": "b"}]}
-    result = attribute(prev, curr)
-    assert result is not None
-    assert not result.suppressed
-    assert result.component == "messages"
+    _assert_break_under_all_orders(prev, curr, "messages")
 
 
 def test_system_change_is_a_break():
@@ -351,10 +370,7 @@ def test_system_change_is_a_break():
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
     ]}
-    result = attribute(prev, curr)
-    assert result is not None
-    assert not result.suppressed
-    assert result.component == "system"
+    _assert_break_under_all_orders(prev, curr, "system")
 
 
 def test_tools_change_is_a_break():
@@ -369,10 +385,20 @@ def test_tools_change_is_a_break():
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
     ]}
-    result = attribute(prev, curr)
-    assert result is not None
-    assert not result.suppressed
-    assert result.component == "tools"
+    _assert_break_under_all_orders(prev, curr, "tools")
+
+
+def test_model_change_is_a_break():
+    """A model change invalidates the whole prefix — never suppressed, any order."""
+    prev = {"model": "claude-sonnet-5", "max_tokens": 1, "system": "S", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+    ]}
+    curr = {"model": "claude-opus-5", "max_tokens": 1, "system": "S", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+    ]}
+    _assert_break_under_all_orders(prev, curr, "model")
 
 
 def test_change_after_breakpoint_is_suppressed():
@@ -388,9 +414,63 @@ def test_change_after_breakpoint_is_suppressed():
         {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
         {"role": "user", "content": "new question"},
     ]}
-    result = attribute(prev, curr)
-    assert result is not None          # the caller still sees the change happened
-    assert result.suppressed            # but the cache did not break
-    assert result.component == "messages"
+    result = _assert_suppressed_under_all_orders(prev, curr, "messages")
     assert result.path[:3] == ["messages", 2, "content"]
     assert "message 2" in result.detail
+
+
+# --- order invariance on real data (AC1) -------------------------------------
+
+def _load_calibrate():
+    spec = importlib.util.spec_from_file_location(
+        "calibrate_attributor",
+        Path(__file__).resolve().parents[1] / "scripts" / "calibrate_attributor.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_suppression_is_order_invariant_on_real_capture():
+    """AC1: for every comparable pair in the real capture, ``suppressed`` is
+    identical across all 120 segment orders. Skips (rather than passes) when the
+    capture file is absent — the property lives in real data, not a synthetic one."""
+    capture = Path(__file__).resolve().parents[1] / "data" / "raw" / "capture.jsonl"
+    if not capture.exists():
+        pytest.skip(f"real capture not present at {capture}; nothing to assert")
+    cal = _load_calibrate()
+    rows = cal.load_records(capture)
+    pairs = [(p, c) for p, c in cal.pair_by_previous(rows) if cal.official_signal(c) is not None]
+    assert pairs, "capture present but holds no comparable pairs"
+
+    for prev, curr in pairs:
+        base = None
+        for order in ALL_ORDERS:
+            result = attribute(prev["request_body"], curr["request_body"], order=order)
+            suppressed = result.suppressed if result is not None else False
+            if base is None:
+                base = suppressed
+            else:
+                assert suppressed == base, (
+                    f"suppression depends on segment order: {order} gave {suppressed}, expected {base}"
+                )
+
+
+# --- multi-component breakpoints (AC4) ---------------------------------------
+
+def test_multi_component_breakpoints_under_every_order():
+    """system (2 cache_control blocks) + messages (1 block): the 46-record shape.
+
+    A system change before the system marker is before the last breakpoint
+    (messages) and must break the cache; a messages change after the last
+    messages marker is in the write tail and must be suppressed — under every
+    segment order."""
+    fx = json.loads((FIXTURES / "multi_component_breakpoints.json").read_text())
+    prev, curr = fx["prev"], fx["curr"]
+
+    # messages change after the last messages marker -> suppressed
+    _assert_suppressed_under_all_orders(prev, curr, "messages")
+
+    # system change before the system marker -> break
+    sys_curr = json.loads(json.dumps(prev))
+    sys_curr["system"][0]["text"] = "You are Claude Code (edited)."
+    _assert_break_under_all_orders(prev, sys_curr, "system")

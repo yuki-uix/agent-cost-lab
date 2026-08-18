@@ -194,3 +194,39 @@ def test_usage_lost_after_a_complete_stream_fails():
     rows[4]["usage"] = None
     _, bad, _ = health.check(rows)
     assert any("lost after a complete stream" in b for b in bad)
+
+
+def test_inconclusive_verdicts_do_not_count_as_support():
+    """`unavailable` and `previous_message_not_found` mean the comparison did
+    not succeed. Counting them as verdicts green-lights 1.1 and #10 on a
+    capture holding zero usable reasons — the wrong-population error this
+    whole gate was rewritten to remove, reproduced in the replacement."""
+    rows = healthy()
+    for r in rows:
+        r["diagnostics"] = None
+        r["diagnostics_present"] = True
+    rows[3]["diagnostics"] = {"cache_miss_reason": {"type": "unavailable"}}
+    rows[4]["diagnostics"] = {"cache_miss_reason": {"type": "previous_message_not_found"}}
+
+    _, bad, stats = health.check(rows)
+    assert not bad, "2 of 11 is under the 30% kill criterion; this is not a failure"
+    assert stats["n_verdicts"] == 0, "neither is a usable reason"
+    supports = {label.split("  ")[0]: yes for label, yes, _ in stats["supports"]}
+    assert supports["E1 1.1"] is False
+    assert supports["#10"] is False
+
+
+def test_the_inconclusive_ratio_cannot_exceed_one():
+    """Numerator over all rows, denominator over threaded ones, printed as
+    'N/M threaded turns'. A first turn carrying an inconclusive verdict made
+    that ratio 12/11."""
+    rows = healthy()
+    for r in rows:
+        r["diagnostics"] = {"cache_miss_reason": None}
+        r["diagnostics_present"] = True
+
+    _, bad, _ = health.check(rows)
+    line = next(b for b in bad if "threaded turns came back" in b)
+    num, denom = line.split(" ")[0].split("/")
+    assert int(num) <= int(denom), line
+    assert int(denom) == sum(1 for r in rows if r["injected_previous_message_id"])

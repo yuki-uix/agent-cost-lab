@@ -134,15 +134,24 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     # Recomputing it over some other population after seeing the data is the
     # exact move that file exists to prevent.
     INCONCLUSIVE = ("previous_message_not_found", "unavailable")
-    inconclusive = [r for r in rows
-                    if isinstance(r.get("diagnostics"), dict)
-                    and ((r["diagnostics"].get("cache_miss_reason") or {}).get("type")
-                         in INCONCLUSIVE
-                         or r["diagnostics"].get("cache_miss_reason") is None)]
+
+    def _inconclusive(r: dict) -> bool:
+        """The comparison was attempted and did not yield a reason."""
+        d = r.get("diagnostics")
+        if not isinstance(d, dict):
+            return False        # null diagnostics is a clean hit, not a failure
+        reason = d.get("cache_miss_reason")
+        return reason is None or (reason or {}).get("type") in INCONCLUSIVE
+
+    # Counted over `threaded`, not over `rows`. Iterating all rows against a
+    # threaded denominator let the ratio exceed 1 (a first turn carrying an
+    # inconclusive verdict entered the numerator but not the denominator) —
+    # the same mixed-population error this file was just rewritten to remove.
+    inconclusive = [r for r in threaded if _inconclusive(r)]
     over = bool(threaded) and len(inconclusive) > 0.30 * len(threaded)
     gate(not over,
          f"{len(inconclusive)}/{len(threaded)} threaded turns came back"
-         " unavailable / previous_message_not_found"
+         " unavailable / previous_message_not_found / no reason"
          + ("  <- over the 30% kill criterion in predictions.md" if over else ""))
 
     gate(len(main) >= 10,
@@ -153,18 +162,24 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     # a clean session fully supports 1.2 and supports 1.1 and #10 not at all,
     # and printing a single verdict hid a capture with zero official verdicts
     # behind ten green lines.
-    has_verdict = bool(verdicts)
+    # `verdicts` includes `unavailable` and `previous_message_not_found`, which
+    # this same file defines as the comparison having failed. Counting them as
+    # support would green-light 1.1 and #10 on a capture holding zero usable
+    # reasons — the wrong-population error this rewrite exists to remove.
+    conclusive = [v for v in verdicts if v not in INCONCLUSIVE]
+    has_verdict = bool(conclusive)
+    _why = (f"needs >=1 conclusive official verdict, has {len(conclusive)}"
+            + (f" ({len(verdicts) - len(conclusive)} inconclusive)"
+               if len(verdicts) != len(conclusive) else ""))
     supports = [
         ("E1 1.2  divergence rate", bool(threaded),
          f"{len(threaded)} threaded turns; a clean session is legitimate data"),
-        ("E1 1.1  miss-cause distribution", has_verdict,
-         f"needs >=1 official verdict, has {len(verdicts)}"),
-        ("#10     calibration vs official", has_verdict,
-         f"needs >=1 official verdict, has {len(verdicts)}"),
+        ("E1 1.1  miss-cause distribution", has_verdict, _why),
+        ("#10     calibration vs official", has_verdict, _why),
     ]
     stats = {"lineages": len(lineages), "main_turns": len(main),
              "threaded": len(threaded), "verdicts": collections.Counter(verdicts),
-             "n_verdicts": len(verdicts), "supports": supports,
+             "n_verdicts": len(conclusive), "supports": supports,
              "undecidable": undecidable}
     return ok, bad, stats
 

@@ -49,10 +49,17 @@ def _lineage_key(body: dict) -> str:
 
     sha256 over a canonical JSON encoding, not hash(): hash() is salted by
     PYTHONHASHSEED (unstable across processes) and cannot hash a dict.
+
+    Defensive about shape: this runs on the request path, before any response
+    exists, so it is not covered by the _observe guard. A body is only known to
+    be valid JSON, not valid for the API — `{"messages": {...}}` parses fine and
+    used to raise KeyError here, turning upstream's 400 into a proxy 500 and
+    hiding the real error from the caller.
     """
-    messages = body.get("messages") or []
-    first = messages[0] if messages else None
-    raw = json.dumps([body.get("model"), first], ensure_ascii=False, sort_keys=True)
+    messages = body.get("messages")
+    first = messages[0] if isinstance(messages, list) and messages else None
+    raw = json.dumps([body.get("model"), first],
+                     ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 

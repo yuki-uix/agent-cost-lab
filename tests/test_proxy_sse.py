@@ -306,3 +306,35 @@ def test_a_broken_parser_cannot_damage_the_stream():
     rec: dict = {}
     assert _observe(exploding, b"x", rec) is None
     assert "boom" in rec["error"]
+
+
+@pytest.mark.parametrize("body,label", [
+    ({"model": "m"}, "messages missing"),
+    ({"model": "m", "messages": []}, "messages empty"),
+    ({"model": "m", "messages": "nope"}, "messages is a string"),
+    ({"model": "m", "messages": {"a": 1}}, "messages is a dict"),
+    ({}, "empty body"),
+    ({"model": "m", "messages": [{"x": {1, 2}}]}, "first message not serialisable"),
+])
+def test_lineage_key_never_raises_on_malformed_bodies(body, label):
+    """_lineage_key runs on the request path, outside the _observe guard.
+
+    A body is only known to be valid JSON, not valid for the API. Raising here
+    turns upstream's 400 into a proxy 500 and hides the real error.
+    """
+    from agentcostlab.proxy import _lineage_key
+
+    assert isinstance(_lineage_key(body), str)
+
+
+def test_malformed_messages_shapes_do_not_collide():
+    """Silent collisions are worse than crashes: distinct shapes, distinct keys."""
+    from agentcostlab.proxy import _lineage_key
+
+    keys = {_lineage_key(b) for b in (
+        {"model": "m"},
+        {"model": "m", "messages": []},
+        {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        {"model": "other", "messages": [{"role": "user", "content": "hi"}]},
+    )}
+    assert len(keys) == 3, "missing and empty messages are both 'no seed'; the rest differ"

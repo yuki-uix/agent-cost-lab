@@ -110,15 +110,37 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     # proxy.py now records `diagnostics_present` separately. Captures made
     # before that carry None and cannot be judged either way; say so rather
     # than passing them.
-    recorded = [r for r in threaded if r.get("diagnostics_present") is not None]
+    # Judged only over turns where a reply was possible at all: served, and
+    # parsed far enough to have usage. A 429 or an aborted stream never reached
+    # the parser, so its `diagnostics_present` is None for a reason that has
+    # nothing to do with the beta header.
+    answerable = [r for r in threaded
+                  if r.get("status_code") == 200 and r.get("usage")]
+    recorded = [r for r in answerable if r.get("diagnostics_present") is not None]
+    unrecorded = [r for r in answerable if r.get("diagnostics_present") is None]
     replied = [r for r in recorded if r["diagnostics_present"]]
+
+    # 0.9, and this number IS chosen here — unlike the 30% below, which
+    # predictions.md locked before any experiment ran. Set high on purpose: the
+    # beta is not probabilistic. Either the header is honoured for a request or
+    # it is not, so a healthy session carries the key on every answerable turn.
+    # The margin is for a stray record the parser could not read, not for a
+    # header that stopped working halfway through — which is the failure mode
+    # E1's 50-turn sessions exist to stress, and which `bool(replied)` passed.
+    BETA_MIN = 0.9
     if recorded:
-        gate(bool(replied),
+        healthy = len(replied) >= BETA_MIN * len(recorded)
+        gate(healthy,
              f"upstream returned a diagnostics key on {len(replied)}/{len(recorded)}"
-             " threaded turns"
-             + ("" if replied else "  <- beta header never took effect"))
-    elif threaded:
-        undecidable = ("beta effectiveness UNDECIDABLE: this capture predates"
+             f" answerable turns"
+             + ("" if healthy else
+                f"  <- under {BETA_MIN:.0%}; the beta header stopped taking effect"))
+    # Reported whenever ANY answerable turn predates the field, not only when
+    # they all do. Judging 1 turn and staying silent about the other 10 reads as
+    # full coverage of a capture that is 90% unjudgeable.
+    if unrecorded:
+        undecidable = (f"beta effectiveness UNDECIDABLE on {len(unrecorded)}"
+                       f"/{len(answerable)} answerable turns: they predate"
                        " diagnostics_present, and a null diagnostics is"
                        " indistinguishable from an absent one")
 
@@ -134,24 +156,35 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     # Recomputing it over some other population after seeing the data is the
     # exact move that file exists to prevent.
     INCONCLUSIVE = ("previous_message_not_found", "unavailable")
+    NO_REASON = "no reason returned"
 
-    def _inconclusive(r: dict) -> bool:
-        """The comparison was attempted and did not yield a reason."""
+    def _inconclusive_kind(r: dict) -> str | None:
+        """Which inconclusive condition this turn is in, or None.
+
+        Returns the label rather than a bool so the printed message is built
+        from the same source as the predicate. When these were two independent
+        pieces of text the message named two of the three counted conditions,
+        and a reader tallying by hand could not reproduce the number.
+        """
         d = r.get("diagnostics")
         if not isinstance(d, dict):
-            return False        # null diagnostics is a clean hit, not a failure
+            return None         # null diagnostics is a clean hit, not a failure
         reason = d.get("cache_miss_reason")
-        return reason is None or (reason or {}).get("type") in INCONCLUSIVE
+        if reason is None:
+            return NO_REASON
+        kind = (reason or {}).get("type")
+        return kind if kind in INCONCLUSIVE else None
+
+    KINDS = " / ".join((*INCONCLUSIVE, NO_REASON))
 
     # Counted over `threaded`, not over `rows`. Iterating all rows against a
     # threaded denominator let the ratio exceed 1 (a first turn carrying an
     # inconclusive verdict entered the numerator but not the denominator) —
     # the same mixed-population error this file was just rewritten to remove.
-    inconclusive = [r for r in threaded if _inconclusive(r)]
+    inconclusive = [r for r in threaded if _inconclusive_kind(r)]
     over = bool(threaded) and len(inconclusive) > 0.30 * len(threaded)
     gate(not over,
-         f"{len(inconclusive)}/{len(threaded)} threaded turns came back"
-         " unavailable / previous_message_not_found / no reason"
+         f"{len(inconclusive)}/{len(threaded)} threaded turns came back {KINDS}"
          + ("  <- over the 30% kill criterion in predictions.md" if over else ""))
 
     gate(len(main) >= 10,

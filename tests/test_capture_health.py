@@ -162,7 +162,11 @@ def test_all_inconclusive_verdicts_fail(reason):
     for r in rows:
         r["diagnostics"] = {"cache_miss_reason": {"type": reason} if reason else None}
     _, bad, _ = health.check(rows)
-    assert any("unavailable / previous_message_not_found" in b for b in bad)
+    # Matched on the stable part of the line, not on the order the kinds are
+    # listed in — that order comes from a constant and is not the behaviour
+    # under test. test_every_counted_condition_is_named_in_the_message covers
+    # the wording.
+    assert any("threaded turns came back" in b for b in bad), bad
 
 
 def test_a_few_inconclusive_verdicts_are_tolerated():
@@ -230,3 +234,69 @@ def test_the_inconclusive_ratio_cannot_exceed_one():
     num, denom = line.split(" ")[0].split("/")
     assert int(num) <= int(denom), line
     assert int(denom) == sum(1 for r in rows if r["injected_previous_message_id"])
+
+
+def _answered(rows, present=True):
+    for r in rows:
+        r["diagnostics"] = None
+        r["diagnostics_present"] = present
+    return rows
+
+
+def test_a_beta_that_dies_partway_fails():
+    """`bool(replied)` passed on a single reply, so a header that stopped
+    working after turn 1 read as healthy — the failure mode a 50-turn session
+    is meant to stress."""
+    rows = _answered(healthy())
+    for r in rows[2:]:
+        r["diagnostics_present"] = False
+    _, bad, _ = health.check(rows)
+    assert any("stopped taking effect" in b for b in bad), bad
+
+
+def test_one_unparsed_record_does_not_condemn_the_capture():
+    """The margin is for a record the parser could not read, not for a dead
+    header."""
+    rows = _answered(healthy(n=22))
+    rows[7]["diagnostics_present"] = False
+    _, bad, _ = health.check(rows)
+    assert not any("stopped taking effect" in b for b in bad), bad
+
+
+def test_turns_that_could_not_answer_are_not_judged():
+    """A 429 never reached the parser. Counting it as 'the beta did not reply'
+    would blame the header for a transport failure."""
+    rows = _answered(healthy())
+    rows[5].update(status_code=429, usage=None, diagnostics_present=None)
+    ok, bad, _ = health.check(rows)
+    line = next(l for l in ok if "diagnostics key" in l)
+    assert "/10 answerable" in line, line   # 11 threaded, one of them a 429
+
+
+def test_partial_vintage_capture_is_reported_not_silently_narrowed():
+    """Judging 1 turn and staying silent about the other 10 reads as full
+    coverage of a capture that is 90% unjudgeable."""
+    rows = _answered(healthy())
+    for r in rows[2:]:
+        r.pop("diagnostics_present", None)
+    _, _, stats = health.check(rows)
+    assert stats["undecidable"], "a mixed-vintage capture must say so"
+    assert "/11 answerable" in stats["undecidable"], stats["undecidable"]
+
+
+@pytest.mark.parametrize("diagnostics,kind", [
+    ({"cache_miss_reason": {"type": "unavailable"}}, "unavailable"),
+    ({"cache_miss_reason": {"type": "previous_message_not_found"}},
+     "previous_message_not_found"),
+    ({"cache_miss_reason": None}, "no reason returned"),
+])
+def test_every_counted_condition_is_named_in_the_message(diagnostics, kind):
+    """The label is built from the predicate's own constants, so a fourth
+    condition cannot be counted without appearing in the text."""
+    rows = _answered(healthy())
+    for r in rows:
+        r["diagnostics"] = diagnostics
+    _, bad, _ = health.check(rows)
+    line = next(b for b in bad if "threaded turns came back" in b)
+    assert kind in line, f"{kind!r} is counted but not named in: {line}"
+    assert line.startswith("11/11"), line

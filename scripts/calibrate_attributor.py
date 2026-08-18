@@ -17,8 +17,11 @@ The official signal comes from whichever source the capture actually recorded:
     is "no divergence".
 
 The segment order is a hypothesis, so this still tries *every* permutation of
-``COMPONENTS`` and reports which agrees best. On the current capture only
-``messages`` ever diverges, so the rate is order-independent.
+``COMPONENTS`` and reports which agrees best. Suppression ("did the cache
+break") is decided in a fixed cache-layout order, independent of the swept
+segment order, so the agreement rate is expected to tie across all permutations;
+the sweep still discriminates *which component* to blame first when several
+diverge.
 
     .venv/bin/python scripts/calibrate_attributor.py [--path data/raw/capture.jsonl]
 """
@@ -154,16 +157,18 @@ def main() -> None:
     if len(distinct) == 1:
         rate, agree, disagree, total, perm = results[0]
         print(f"agreement rate: {rate:.1%}  ({agree}/{total})  (all {len(results)} "
-              f"segment orders tie — only `messages` ever diverges)")
+              f"segment orders tie — suppression is decided in cache-layout order)")
+        best_perm = perm
+        best_disagree = disagree
     else:
         print("segment-order agreement rate (comparable pairs only):")
         for rate, agree, disagree, total, perm in results:
             print(f"  {rate:6.1%}  ({agree}/{total})  {' → '.join(perm)}")
         print()
-    best_rate, best_agree, best_disagree, best_total, best_perm = results[0]
-    print(f"best order: {' → '.join(best_perm)}   "
-          f"agreement {best_rate:.1%} ({best_agree}/{best_total})")
-    print()
+        best_rate, best_agree, best_disagree, best_total, best_perm = results[0]
+        print(f"best order: {' → '.join(best_perm)}   "
+              f"agreement {best_rate:.1%} ({best_agree}/{best_total})")
+        print()
 
     suppressed = 0
     for prev, curr, _ in comparable:
@@ -174,9 +179,10 @@ def main() -> None:
           f"{suppressed}")
     print()
 
-    # Disagreement breakdown for the best order: what did we report that the
-    # cache signal did not, and vice versa?
-    print("disagreement breakdown (best order):")
+    # Disagreement breakdown: what did we report that the cache signal did not,
+    # and vice versa? (On a full tie every order disagrees identically, so the
+    # choice below is immaterial.)
+    print("disagreement breakdown:")
     if best_disagree == 0:
         print("  none")
     else:

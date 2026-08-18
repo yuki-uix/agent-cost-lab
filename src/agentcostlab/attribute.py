@@ -35,6 +35,14 @@ cache-*write* tail that was never in the cache. A divergence that falls after
 that marker is therefore a text change that does **not** break the cache: the
 attributor returns it ``suppressed`` (still visible to the caller, not counted
 as a miss) instead of reporting a cache break.
+
+Where that marker sits is a physical fact, not a hypothesis, so it must not be
+taken from :data:`SEGMENT_ORDER`. The cacheable prefix is laid out
+``tools → system → messages`` (Anthropic's documented request layout), captured
+in :data:`CACHE_LAYOUT`; suppression is decided structurally in that order and
+never by comparing byte offsets measured in two different spaces. Sweeping
+``SEGMENT_ORDER`` still changes *which* divergence is attributed first, but it
+no longer changes whether a given divergence broke the cache.
 """
 from __future__ import annotations
 
@@ -48,8 +56,19 @@ from dataclasses import dataclass
 # thinking, context_management, output_config, output_format, cache_control, …).
 COMPONENTS: tuple[str, ...] = ("model", "system", "tools", "messages", "params")
 
-# Prefix concatenation order. A hypothesis to be measured, not a fact.
+# Prefix concatenation order. A hypothesis to be measured, not a fact: which
+# component to blame *first* when several diverge. ``scripts/calibrate_attributor.py``
+# sweeps it. It must NOT feed the suppression decision — where the cacheable
+# prefix ends is a physical fact fixed by :data:`CACHE_LAYOUT`, not a hypothesis.
 SEGMENT_ORDER: tuple[str, ...] = ("model", "tools", "system", "messages", "params")
+
+# The cache prefix's physical layout: Anthropic's documented request layout is
+# tools → system → messages, and that is what fixes where the cacheable prefix
+# ends — the last ``cache_control`` block in *this* order is the true end of the
+# cached prefix, regardless of the order the attributor is asked to blame first.
+# This encodes an assumption about Anthropic's request layout; the suppression
+# rule degrades on a provider that lays the prefix out differently.
+CACHE_LAYOUT: tuple[str, ...] = ("tools", "system", "messages")
 
 # Top-level fields that do NOT participate in the cache prefix. A change in one
 # of these leaves a cache hit intact, so the attributor ignores it. ``diagnostics``
@@ -295,31 +314,52 @@ def _messages_breakpoint_end(messages: object) -> int | None:
     return last
 
 
-def _cache_breakpoint_offset(
-    segments: dict[str, object], *, order: tuple[str, ...]
-) -> int | None:
-    """Byte offset of the end of the last ``cache_control``-bearing block, or ``None``.
+def _cache_breakpoint(segments: dict[str, object]) -> tuple[str, int] | None:
+    """(component, byte offset within it) of the end of the last
+    ``cache_control``-bearing block, walking :data:`CACHE_LAYOUT`, or ``None``.
 
-    Measured in the same normalised byte space as :func:`prefix_bytes`, so it is
-    directly comparable to a divergence's ``bytes_before``. ``cache_control``
-    marks the end of the cacheable prefix; anything after the last marker is a
-    cache-*write* tail, so a divergence there does not break the cache.
+    The layout order is a physical fact, not the swept :data:`SEGMENT_ORDER`
+    hypothesis: ``cache_control`` marks the *end* of the cacheable prefix, and
+    the last marker in cache-layout order is where that prefix actually ends.
+    The offset is measured in the component's own normalised byte space, so it is
+    comparable to a divergence's ``within`` offset only when the divergence is in
+    the *same* component — cross-component suppression is decided structurally
+    (see :func:`attribute`), never by comparing offsets from different spaces.
     """
-    offset = 0
-    last = None
-    for component in order:
+    for component in reversed(CACHE_LAYOUT):
         raw = segments[component]
-        norm = _normalise(component, raw)
         if component == "messages":
             rel = _messages_breakpoint_end(raw)
-        elif component in ("system", "tools"):
+        else:  # "system" / "tools"
             rel = _list_breakpoint_end(raw)
-        else:
-            rel = None
         if rel is not None:
-            last = offset + rel
-        offset += len(_dump(norm))
-    return last
+            return component, rel
+    return None
+
+
+def _is_suppressed(component: str, within: int, breakpoint: tuple[str, int] | None) -> bool:
+    """Whether a divergence ``within`` bytes into ``component`` is a break.
+
+    Structural in :data:`CACHE_LAYOUT`: a divergence in a component *after* the
+    component that holds the last breakpoint is in the uncached write tail
+    (suppressed); a component before it is still cached (a break); ``model`` and
+    ``params`` invalidate the whole prefix (never suppressed). Same component:
+    the divergence suppresses only when it lands after that component's own last
+    breakpoint byte — ``within`` and the breakpoint offset are then both measured
+    in the same component's byte space, so the comparison is meaningful.
+    """
+    if component in ("model", "params"):
+        return False
+    if breakpoint is None:
+        return False
+    bp_component, bp_offset = breakpoint
+    div_index = CACHE_LAYOUT.index(component)
+    bp_index = CACHE_LAYOUT.index(bp_component)
+    if div_index > bp_index:
+        return True
+    if div_index < bp_index:
+        return False
+    return within >= bp_offset
 
 
 def attribute(
@@ -332,14 +372,15 @@ def attribute(
     growth, which Anthropic likewise reports as "no divergence").
 
     A divergence that falls *after* the prev request's last ``cache_control``
-    block is a text change in the non-cached tail: it is still returned (with
+    block — the last one in :data:`CACHE_LAYOUT`, not in the swept ``order`` —
+    is a text change in the non-cached tail: it is still returned (with
     ``suppressed=True``) so the caller can see it, but it did not break the
     cache. A plain ``Divergence`` means the cache did break.
     """
     prev_segments = _segments(prev_body)
     curr_segments = _segments(curr_body)
     total = len(prefix_bytes(curr_body, order=order))
-    breakpoint = _cache_breakpoint_offset(prev_segments, order=order)
+    breakpoint = _cache_breakpoint(prev_segments)
 
     offset = 0  # bytes of curr's prefix consumed before the current segment
     for component in order:
@@ -368,7 +409,7 @@ def attribute(
             path=path,
             bytes_before=offset + within,
             bytes_after=total - (offset + within),
-            suppressed=breakpoint is not None and offset + within >= breakpoint,
+            suppressed=_is_suppressed(component, within, breakpoint),
         )
     return None
 

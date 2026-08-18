@@ -1,0 +1,45 @@
+{
+  "name": "multi_component_breakpoints",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": [
+      {"type": "text", "text": "You are Claude Code."},
+      {"type": "text", "text": "Tool use is enabled.", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+      {"type": "text", "text": "Be helpful and concise."},
+      {"type": "text", "text": "System end.", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    ],
+    "tools": [],
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [
+        {"type": "text", "text": "done", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+      ]},
+      {"role": "user", "content": "old question"}
+    ]
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": [
+      {"type": "text", "text": "You are Claude Code."},
+      {"type": "text", "text": "Tool use is enabled.", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+      {"type": "text", "text": "Be helpful and concise."},
+      {"type": "text", "text": "System end.", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    ],
+    "tools": [],
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [
+        {"type": "text", "text": "done", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+      ]},
+      {"role": "user", "content": "new question"}
+    ]
+  },
+  "expected": {
+    "component": "messages",
+    "path": ["messages", 2, "content", 0, "text"],
+    "suppressed": true,
+    "detail_contains": ["message 2", "text differs"]
+  }
+}

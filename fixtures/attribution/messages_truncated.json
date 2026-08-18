@@ -1,0 +1,32 @@
+{
+  "name": "messages_truncated",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": "hello"},
+      {"role": "user", "content": "what is 2+2?"},
+      {"role": "assistant", "content": "4"},
+      {"role": "user", "content": "and 3+3?"}
+    ],
+    "tools": []
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": "hello"},
+      {"role": "user", "content": "what is 2+2?"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "component": "messages",
+    "path": ["messages", 3],
+    "detail_contains": ["message removed", "index 3"]
+  }
+}

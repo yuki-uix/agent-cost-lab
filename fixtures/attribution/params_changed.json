@@ -1,0 +1,28 @@
+{
+  "name": "params_changed",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"}
+    ],
+    "tools": [],
+    "thinking": {"type": "enabled", "budget_tokens": 1000}
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"}
+    ],
+    "tools": [],
+    "thinking": {"type": "enabled", "budget_tokens": 4000}
+  },
+  "expected": {
+    "component": "params",
+    "path": ["params", "thinking", "budget_tokens"],
+    "detail_contains": ["value changed"]
+  }
+}

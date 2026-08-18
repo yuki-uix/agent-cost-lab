@@ -1,0 +1,32 @@
+{
+  "name": "tools_reordered",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"}
+    ],
+    "tools": [
+      {"name": "read", "description": "Read a file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}},
+      {"name": "bash", "description": "Run a command", "input_schema": {"type": "object", "properties": {"cmd": {"type": "string"}}}}
+    ]
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"}
+    ],
+    "tools": [
+      {"name": "bash", "description": "Run a command", "input_schema": {"type": "object", "properties": {"cmd": {"type": "string"}}}},
+      {"name": "read", "description": "Read a file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+    ]
+  },
+  "expected": {
+    "component": "tools",
+    "path": ["tools", 0],
+    "detail_contains": ["tool reordered"]
+  }
+}

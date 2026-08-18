@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 
 import httpx
+
+from .codec import serialise
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -73,17 +75,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-
-
-def serialise(body: dict) -> bytes:
-    """Re-emit a request body without rewriting it.
-
-    The default json.dumps escapes non-ASCII to \\uXXXX and pads separators,
-    which inflated a CJK payload by 39% in testing. An instrument that silently
-    rewrites its subject is worse than no instrument, so both settings are
-    load-bearing, not style.
-    """
-    return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
 
 
 def _inject_diagnostics(body: dict, headers: dict, key: str) -> None:

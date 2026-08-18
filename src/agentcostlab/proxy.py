@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 UPSTREAM = os.environ.get("ACL_UPSTREAM", "https://api.anthropic.com")
 PROVIDER = os.environ.get("ACL_PROVIDER", "anthropic")
@@ -69,6 +69,18 @@ def _inject_diagnostics(body: dict, headers: dict) -> None:
     headers["anthropic-beta"] = ",".join(betas)
 
 
+def _write(record: dict) -> None:
+    record.setdefault("t_end", time.time())
+    CAPTURE.parent.mkdir(parents=True, exist_ok=True)
+    with CAPTURE.open("a") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
+# Hop-by-hop headers we must not echo back: we re-stream the raw body, so the
+# framework recomputes framing itself.
+DROP_RESPONSE = {"content-length", "transfer-encoding", "connection"}
+
+
 @app.post("/v1/messages")
 async def messages(request: Request):
     raw = await request.body()
@@ -77,6 +89,12 @@ async def messages(request: Request):
 
     if PROVIDER == "anthropic":
         _inject_diagnostics(body, headers)
+
+    # Ask upstream not to compress. aiter_raw() yields undecoded bytes, so a
+    # gzipped stream passes through fine but is unparseable here — the ledger
+    # silently loses usage on every call while the client sees nothing wrong.
+    # Locally the bandwidth is irrelevant; a readable stream is not.
+    headers["accept-encoding"] = "identity"
 
     payload = serialise(body)
     t0 = time.perf_counter()
@@ -94,6 +112,8 @@ async def messages(request: Request):
         "diagnostics": None,
         "response_id": None,
         "first_byte_ms": None,
+        "status_code": None,
+        "error": None,
     }
 
     client: httpx.AsyncClient = request.app.state.client
@@ -101,50 +121,146 @@ async def messages(request: Request):
         "POST", f"{UPSTREAM}/v1/messages", content=payload, headers=headers
     )
 
+    # Send before returning: the status and content-type have to be known up
+    # front. Starting a StreamingResponse first commits us to 200, so an
+    # upstream failure would reach the client as "HTTP 200, empty body" —
+    # which is exactly what it did before this was fixed.
+    try:
+        resp = await client.send(req, stream=True)
+    except httpx.HTTPError as exc:
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        _write(record)
+        return JSONResponse(
+            status_code=502,
+            content={"type": "error", "error": {"type": "proxy_upstream_error",
+                                                "message": record["error"]}},
+        )
+
+    record["status_code"] = resp.status_code
+    ctype = resp.headers.get("content-type", "application/json")
+
+    # identity is a request, not a guarantee. If upstream compresses anyway,
+    # aiter_raw() yields bytes we cannot parse and the ledger would quietly
+    # zero out while the client decodes the stream and notices nothing. Record
+    # it: a logged failure is recoverable, a silent one corrupts the dataset.
+    enc = resp.headers.get("content-encoding", "identity").strip().lower()
+    if enc and enc != "identity":
+        record["error"] = f"upstream ignored identity encoding: {enc}"
+    passthrough = {k: v for k, v in resp.headers.items()
+                   if k.lower() not in DROP_RESPONSE and k.lower() != "content-type"}
+
     async def gen():
-        buf, seen_start = b"", False
+        buf, parsed = b"", False
         try:
-            resp = await client.send(req, stream=True)
-            try:
-                async for chunk in resp.aiter_raw():
-                    if record["first_byte_ms"] is None:
-                        record["first_byte_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-                    # Pass through first, parse second: the copy never delays the client.
-                    yield chunk
-                    if not seen_start:
-                        buf += chunk
-                        if b"message_start" in buf and b"\n\n" in buf:
-                            seen_start = _parse_start(buf, record)
-                            if seen_start:
-                                buf = b""
-            finally:
-                await resp.aclose()
+            async for chunk in resp.aiter_raw():
+                if record["first_byte_ms"] is None:
+                    record["first_byte_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+                # Pass through first, parse second: the copy never delays the client.
+                yield chunk
+                if not parsed:
+                    buf += chunk
+                    if b"message_start" in buf and b"\n\n" in buf:
+                        parsed = _observe(_parse_start, buf, record) or False
+                        if parsed:
+                            buf = b""
+            if not parsed and buf and enc == "identity":
+                _observe(_parse_json_body, buf, record)
         finally:
+            await resp.aclose()
             # Written even when the client aborts mid-stream, so partial
             # sessions still show up in the ledger instead of vanishing.
-            record["t_end"] = time.time()
-            CAPTURE.parent.mkdir(parents=True, exist_ok=True)
-            with CAPTURE.open("a") as fh:
-                fh.write(json.dumps(record) + "\n")
+            _write(record)
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(gen(), status_code=resp.status_code,
+                             media_type=ctype, headers=passthrough)
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def passthrough(path: str, request: Request):
+    """Anything that is not /v1/messages still has to work.
+
+    Claude Code calls other endpoints (token counting, and more). Without this
+    they 404 at the proxy and the client reports a malformed response.
+    """
+    raw = await request.body()
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in STRIP}
+    client: httpx.AsyncClient = request.app.state.client
+    try:
+        resp = await client.request(request.method, f"{UPSTREAM}/{path}",
+                                    content=raw, headers=headers,
+                                    params=dict(request.query_params))
+    except httpx.HTTPError as exc:
+        return JSONResponse(status_code=502, content={
+            "type": "error",
+            "error": {"type": "proxy_upstream_error",
+                      "message": f"{type(exc).__name__}: {exc}"}})
+    return Response(content=resp.content, status_code=resp.status_code,
+                    media_type=resp.headers.get("content-type"))
+
+
+def _observe(fn, buf: bytes, record: dict):
+    """Run a parser so that it can never damage the stream it is reading.
+
+    Hardening each parser individually has now failed twice in this file: the
+    fix went to the path that triggered, and the sibling kept the same bug. The
+    guard is structural so a future parser inherits it by default.
+    """
+    try:
+        return fn(buf, record)
+    except Exception as exc:  # noqa: BLE001 - observing must never be fatal
+        record["error"] = f"parse failed: {type(exc).__name__}: {exc}"
+        return None
 
 
 def _parse_start(buf: bytes, record: dict) -> bool:
+    """Pull usage/diagnostics out of the SSE message_start event."""
     for block in buf.split(b"\n\n"):
         for line in block.split(b"\n"):
             if not line.startswith(b"data: "):
                 continue
             try:
                 payload = json.loads(line[6:])
-            except json.JSONDecodeError:
+            except ValueError:
+                # ValueError, not JSONDecodeError: non-UTF8 bytes raise
+                # UnicodeDecodeError, and this runs inside the streaming loop
+                # where anything raised truncates the client's response.
                 continue
-            if payload.get("type") != "message_start":
+            if not isinstance(payload, dict) or payload.get("type") != "message_start":
                 continue
-            msg = payload["message"]
+            msg = payload.get("message")
+            if not isinstance(msg, dict):
+                continue
             record["usage"] = msg.get("usage")
             record["diagnostics"] = msg.get("diagnostics")
             record["response_id"] = msg.get("id")
             LAST_ID["id"] = msg.get("id")
             return True
     return False
+
+
+def _parse_json_body(buf: bytes, record: dict) -> None:
+    """Non-streaming replies carry the same fields, just not as SSE.
+
+    Without this the ledger silently loses usage for every non-streamed call.
+    """
+    try:
+        msg = json.loads(buf)
+    except ValueError:
+        # JSONDecodeError and UnicodeDecodeError are both ValueError. Catching
+        # only the former let a gzipped body raise straight out of the response
+        # generator and truncate the client's stream — the observer breaking
+        # the thing it observes.
+        return
+    if not isinstance(msg, dict) or msg.get("type") == "error":
+        return
+    record["usage"] = msg.get("usage")
+    record["diagnostics"] = msg.get("diagnostics")
+    record["response_id"] = msg.get("id")
+    if msg.get("id"):
+        LAST_ID["id"] = msg["id"]
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8787, log_level="warning")

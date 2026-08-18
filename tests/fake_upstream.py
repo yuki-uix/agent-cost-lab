@@ -3,7 +3,7 @@ import asyncio
 import json
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 app = FastAPI()
 STATE = {"last_headers": None, "last_body": None, "cancelled": False, "events_sent": 0}
@@ -18,6 +18,44 @@ async def last():
 @app.post("/v1/messages")
 async def messages(request: Request):
     body = await request.json()
+    # Behaviour switches, so the proxy can be tested against non-200 and
+    # non-streaming replies as well as the happy path.
+    if body.get("model") == "error-400":
+        return JSONResponse(status_code=400, content={
+            "type": "error", "error": {"type": "invalid_request_error",
+                                       "message": "simulated upstream rejection"}})
+    # Only honours identity; if the proxy fails to ask for it, this returns
+    # gzip and the proxy's parsing must still cope.
+    # An uncooperative upstream: compresses no matter what was asked for.
+    if body.get("model") == "gzip-always":
+        import gzip as _gz
+        payload = (b'event: message_start\ndata: ' + json.dumps({
+            "type": "message_start",
+            "message": {"id": "msg_gz2", "type": "message", "role": "assistant",
+                        "content": [], "usage": {"input_tokens": 5, "output_tokens": 1,
+                        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}},
+        }).encode() + b'\n\n')
+        return Response(content=_gz.compress(payload), media_type="text/event-stream",
+                        headers={"content-encoding": "gzip"})
+    if body.get("model") == "gzip-me":
+        import gzip as _gz
+        payload = (b'event: message_start\ndata: ' + json.dumps({
+            "type": "message_start",
+            "message": {"id": "msg_gz", "type": "message", "role": "assistant",
+                        "content": [], "usage": {"input_tokens": 11, "output_tokens": 2,
+                        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}},
+        }).encode() + b'\n\n')
+        wants_identity = request.headers.get("accept-encoding", "") == "identity"
+        if wants_identity:
+            return Response(content=payload, media_type="text/event-stream")
+        return Response(content=_gz.compress(payload), media_type="text/event-stream",
+                        headers={"content-encoding": "gzip"})
+    if body.get("stream") is False:
+        return JSONResponse({"id": "msg_fake_json", "type": "message",
+                             "role": "assistant", "content": [],
+                             "usage": {"input_tokens": 7, "output_tokens": 3,
+                                       "cache_read_input_tokens": 0,
+                                       "cache_creation_input_tokens": 0}})
     STATE.update(last_headers=dict(request.headers), last_body=body,
                  cancelled=False, events_sent=0)
 

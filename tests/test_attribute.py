@@ -46,6 +46,8 @@ def test_fixture_matches_expectation(name, fx):
     assert result is not None, f"{name}: expected {expected['component']}, got None"
     assert result.component == expected["component"], name
     assert result.path == expected["path"], name
+    if "suppressed" in expected:
+        assert result.suppressed is expected["suppressed"], name
     for needle in expected.get("detail_contains", []):
         assert needle in result.detail, f"{name}: {result.detail!r} missing {needle!r}"
 
@@ -278,3 +280,117 @@ def test_attributor_and_proxy_share_one_encoder():
     assert attribute.serialise is codec.serialise
     # and the sentinel path stays local to the attributor
     assert attribute._dump(attribute._MISSING) == b""
+
+
+# --- cache-aware suppression: the six AC2 counterexamples ---------------------
+#
+# The attributor now reports "did the cache actually break", not "did the text
+# change". A divergence after the request's last cache_control block is in the
+# non-cached tail and must be suppressed (returned with suppressed=True, not as
+# a break) — but *only* that case. These six pin the boundary so the rule cannot
+# be widened into silence. The first five must still report; the last must not.
+
+_CTRL = {"type": "ephemeral"}
+
+
+def test_change_before_breakpoint_is_a_break():
+    """Editing a message that sits before the last cache_control block is still a miss."""
+    prev = {"model": "a", "max_tokens": 1, "messages": [
+        {"role": "user", "content": "original question"},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer", "cache_control": _CTRL}]},
+        {"role": "user", "content": "next"},
+    ]}
+    curr = {"model": "a", "max_tokens": 1, "messages": [
+        {"role": "user", "content": "CHANGED question"},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer", "cache_control": _CTRL}]},
+        {"role": "user", "content": "next"},
+    ]}
+    result = attribute(prev, curr)
+    assert result is not None
+    assert not result.suppressed
+    assert result.component == "messages"
+    assert result.path[:2] == ["messages", 0]
+
+
+def test_change_in_breakpoint_block_is_a_break():
+    """Editing the very block that carries cache_control is still a miss."""
+    prev = {"model": "a", "max_tokens": 1, "messages": [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer A", "cache_control": _CTRL}]},
+        {"role": "user", "content": "next"},
+    ]}
+    curr = {"model": "a", "max_tokens": 1, "messages": [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer B", "cache_control": _CTRL}]},
+        {"role": "user", "content": "next"},
+    ]}
+    result = attribute(prev, curr)
+    assert result is not None
+    assert not result.suppressed
+    assert result.component == "messages"
+    assert result.path[:4] == ["messages", 1, "content", 0]
+
+
+def test_change_with_no_breakpoint_is_a_break():
+    """A request with no cache_control marker has no breakpoint to hide behind."""
+    prev = {"model": "a", "max_tokens": 1, "messages": [{"role": "user", "content": "a"}]}
+    curr = {"model": "a", "max_tokens": 1, "messages": [{"role": "user", "content": "b"}]}
+    result = attribute(prev, curr)
+    assert result is not None
+    assert not result.suppressed
+    assert result.component == "messages"
+
+
+def test_system_change_is_a_break():
+    """A system change is before the messages breakpoint, so it is still a miss."""
+    prev = {"model": "a", "max_tokens": 1, "system": "You are version A.", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+    ]}
+    curr = {"model": "a", "max_tokens": 1, "system": "You are version B.", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+    ]}
+    result = attribute(prev, curr)
+    assert result is not None
+    assert not result.suppressed
+    assert result.component == "system"
+
+
+def test_tools_change_is_a_break():
+    """A tools change is before the messages breakpoint, so it is still a miss."""
+    read = {"name": "read", "input_schema": {"type": "object"}}
+    bash = {"name": "bash", "input_schema": {"type": "object"}}
+    prev = {"model": "a", "max_tokens": 1, "tools": [read], "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+    ]}
+    curr = {"model": "a", "max_tokens": 1, "tools": [read, bash], "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+    ]}
+    result = attribute(prev, curr)
+    assert result is not None
+    assert not result.suppressed
+    assert result.component == "tools"
+
+
+def test_change_after_breakpoint_is_suppressed():
+    """Editing a block after the last cache_control block does not break the
+    cache — it is suppressed, but still visible (AC4: the trace survives)."""
+    prev = {"model": "a", "max_tokens": 1, "messages": [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+        {"role": "user", "content": "old question"},
+    ]}
+    curr = {"model": "a", "max_tokens": 1, "messages": [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": [{"type": "text", "text": "done", "cache_control": _CTRL}]},
+        {"role": "user", "content": "new question"},
+    ]}
+    result = attribute(prev, curr)
+    assert result is not None          # the caller still sees the change happened
+    assert result.suppressed            # but the cache did not break
+    assert result.component == "messages"
+    assert result.path[:3] == ["messages", 2, "content"]
+    assert "message 2" in result.detail

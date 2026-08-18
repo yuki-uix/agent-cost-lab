@@ -1,0 +1,25 @@
+{
+  "name": "messages_cache_control_marker",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [{"type": "text", "text": "当前目录 `llm-idea` 是空的。", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]}
+    ],
+    "tools": []
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [{"type": "text", "text": "当前目录 `llm-idea` 是空的。"}]},
+      {"role": "user", "content": "next"}
+    ],
+    "tools": []
+  },
+  "expected": null
+}

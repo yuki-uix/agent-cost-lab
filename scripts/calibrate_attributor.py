@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
-"""Calibrate the prefix-diff attributor against Anthropic's cache_miss_reason.
+"""Calibrate the prefix-diff attributor against the captured cache signal.
 
-Reads ``data/raw/capture.jsonl`` (each record has ``request_body`` and the
-official ``diagnostics``), runs ``attribute()`` over every pair of adjacent
-requests, and compares against ``cache_miss_reason.type``.
+Reads ``data/raw/capture.jsonl`` and, for every record whose
+``injected_previous_message_id`` points at a previous record in the file, runs
+``attribute()`` over that pair and compares the result against the official
+"did the cache break" signal.
 
-The segment order is a hypothesis, so this tries *every* permutation of
-``COMPONENTS`` and reports which one agrees best with the official reason. That
-result is the deliverable — the attributor's default order must be changed to
-match it, not left as a guess.
+The official signal comes from whichever source the capture actually recorded:
+
+*   ``diagnostics.cache_miss_reason.type`` (Anthropic's ``*_changed`` reasons)
+    when present;
+*   otherwise ``usage.cache_read_input_tokens > 0`` — a turn that reads tokens
+    from cache did not break the prefix, so it is "no divergence". This is the
+    signal available in the 75-record Claude Code capture: it never breaks
+    (``cache_read_input_tokens`` climbs monotonically), so every comparable turn
+    is "no divergence".
+
+The segment order is a hypothesis, so this still tries *every* permutation of
+``COMPONENTS`` and reports which agrees best. On the current capture only
+``messages`` ever diverges, so the rate is order-independent.
 
     .venv/bin/python scripts/calibrate_attributor.py [--path data/raw/capture.jsonl]
 """
@@ -36,16 +46,6 @@ OFFICIAL_TO_COMPONENT = {
     "messages_changed": "messages",
 }
 
-# Buckets for which the API produced no scoreable comparison (or one we must
-# report apart from the agreement rate — AC2).
-NON_COMPARABLE = {
-    "first_turn",                 # previous_message_id was null: nothing to compare
-    "cross_session",              # paired across a session boundary, not a real pair
-    "pending",                    # cache_miss_reason null: comparison still running
-    "previous_message_not_found", # no stored fingerprint for previous_message_id
-    "unavailable",                # API couldn't pinpoint (params change / too long)
-}
-
 
 def load_records(path: Path) -> list[dict]:
     records = []
@@ -58,26 +58,48 @@ def load_records(path: Path) -> list[dict]:
     return records
 
 
-def pair_bucket(prev: dict, curr: dict) -> str:
-    """What did the official API say about this adjacent pair?"""
-    # The proxy records which id it injected; the official comparison is only
-    # valid against that exact previous message, not against whatever happens to
-    # sit on the previous line.
-    if curr.get("injected_previous_message_id") and prev.get("response_id"):
-        if curr["injected_previous_message_id"] != prev["response_id"]:
-            return "cross_session"
+def pair_by_previous(records: list[dict]) -> list[tuple[dict, dict]]:
+    """Pair each record with the *actual* previous message it names.
 
-    if not curr.get("injected_previous_message_id"):
-        return "first_turn"
+    The capture interleaves sub-conversations (main agent, title/summary
+    auxiliaries, …) on adjacent lines, so "previous line" is not the previous
+    message. ``injected_previous_message_id`` is: it names the exact
+    ``response_id`` whose request the cache was compared against.
+    """
+    by_response_id = {r.get("response_id"): r for r in records if r.get("response_id")}
+    pairs = []
+    for curr in records:
+        ipm = curr.get("injected_previous_message_id")
+        if not ipm:
+            continue  # first turn of a conversation: nothing to compare
+        prev = by_response_id.get(ipm)
+        if prev is None:
+            continue  # previous message not in this capture
+        pairs.append((prev, curr))
+    return pairs
 
+
+def official_signal(curr: dict) -> str | None:
+    """"no_divergence", a ``*_changed`` component, or None (no usable signal)."""
     diagnostics = curr.get("diagnostics")
-    if diagnostics is None:
-        return "no_divergence"      # diagnostics null, and not the first turn
-    reason = diagnostics.get("cache_miss_reason")
-    if reason is None:
-        return "pending"
-    signal = reason.get("type")
-    return signal if signal else "pending"
+    if diagnostics:
+        reason = diagnostics.get("cache_miss_reason")
+        if reason and reason.get("type"):
+            return reason["type"]
+        if reason is not None:
+            return "pending"  # cache_miss_reason present but null
+        # diagnostics present without a miss reason: cache was hit.
+        return "no_divergence"
+
+    usage = curr.get("usage") or {}
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_creation = usage.get("cache_creation_input_tokens", 0)
+    input_tokens = usage.get("input_tokens", 0)
+    if cache_read == 0 and cache_creation == 0 and input_tokens == 0:
+        # No usage recorded (e.g. a request that errored before billing): the
+        # pair carries no ground truth, so it is not comparable.
+        return None
+    return "no_divergence" if cache_read > 0 else "messages_changed"
 
 
 def main() -> None:
@@ -94,28 +116,29 @@ def main() -> None:
         sys.exit(1)
 
     records = load_records(path)
-    if len(records) < 2:
-        print(f"only {len(records)} record(s); need >= 2 to compare adjacent requests.")
-        sys.exit(1)
+    pairs = [(p, c, official_signal(c)) for p, c in pair_by_previous(records)]
 
-    pairs = []
-    for i in range(len(records) - 1):
-        prev, curr = records[i], records[i + 1]
-        pairs.append((prev, curr, pair_bucket(prev, curr)))
+    has_miss_reason = any(r.get("diagnostics") for r in records)
+    signal_name = (
+        "diagnostics.cache_miss_reason.type"
+        if has_miss_reason
+        else "usage.cache_read_input_tokens > 0"
+    )
 
-    print(f"records: {len(records)}   adjacent pairs: {len(pairs)}")
-    print("official signal buckets:")
-    for bucket, n in Counter(b for *_, b in pairs).most_common():
+    comparable = [(p, c, s) for p, c, s in pairs if s is not None]
+    print(f"records: {len(records)}   pairs (by injected_previous_message_id): {len(pairs)}")
+    print(f"official signal: {signal_name}")
+    print(f"comparable pairs (signal present): {len(comparable)}")
+    print("signal buckets:")
+    for bucket, n in Counter(s for *_, s in comparable).most_common():
         print(f"  {bucket:26s} {n}")
     print()
 
     results = []
     for perm in itertools.permutations(COMPONENTS):
         agree = disagree = 0
-        for prev, curr, bucket in pairs:
-            if bucket in NON_COMPARABLE:
-                continue
-            official = None if bucket == "no_divergence" else OFFICIAL_TO_COMPONENT[bucket]
+        for prev, curr, signal in comparable:
+            official = None if signal == "no_divergence" else OFFICIAL_TO_COMPONENT.get(signal)
             mine = attribute(prev["request_body"], curr["request_body"], order=perm)
             mine_comp = None if mine is None else mine.component
             if mine_comp == official:
@@ -127,78 +150,63 @@ def main() -> None:
         results.append((rate, agree, disagree, total, perm))
 
     results.sort(key=lambda r: (-r[0], r[1], r[2]))
-
-    print("segment-order agreement rate (comparable pairs only):")
-    for rate, agree, disagree, total, perm in results:
-        print(f"  {rate:6.1%}  ({agree}/{total})  {' → '.join(perm)}")
-    print()
-
+    distinct = {r[0] for r in results}
+    if len(distinct) == 1:
+        rate, agree, disagree, total, perm = results[0]
+        print(f"agreement rate: {rate:.1%}  ({agree}/{total})  (all {len(results)} "
+              f"segment orders tie — only `messages` ever diverges)")
+    else:
+        print("segment-order agreement rate (comparable pairs only):")
+        for rate, agree, disagree, total, perm in results:
+            print(f"  {rate:6.1%}  ({agree}/{total})  {' → '.join(perm)}")
+        print()
     best_rate, best_agree, best_disagree, best_total, best_perm = results[0]
     print(f"best order: {' → '.join(best_perm)}   "
           f"agreement {best_rate:.1%} ({best_agree}/{best_total})")
-    print(f"AC1 (agreement rate on comparable pairs) = {best_rate:.1%}")
     print()
 
-    # Detailed disagreement breakdown for the best order (AC2).
+    # Disagreement breakdown for the best order: what did we report that the
+    # cache signal did not, and vice versa?
     print("disagreement breakdown (best order):")
     if best_disagree == 0:
         print("  none")
     else:
         disagree_rows = []
-        for idx, (prev, curr, bucket) in enumerate(pairs):
-            if bucket in NON_COMPARABLE:
-                continue
-            official = None if bucket == "no_divergence" else OFFICIAL_TO_COMPONENT[bucket]
+        for prev, curr, signal in comparable:
+            official = None if signal == "no_divergence" else OFFICIAL_TO_COMPONENT.get(signal)
             mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
             mine_comp = None if mine is None else mine.component
             if mine_comp == official:
                 continue
             diverged = set(diverging_components(prev["request_body"], curr["request_body"]))
             if mine_comp is None:
-                kind = "missed"               # API saw a change we did not
+                kind = "missed"
             elif official is None:
-                kind = "over-reported"        # we saw a change the API did not
+                kind = "over-reported"
             elif official in diverged and mine_comp in diverged:
-                kind = "both changed"         # order/difference in attribution
+                kind = "both changed"
             elif official in diverged:
-                kind = "official-early-only"  # we reported a later divergence
+                kind = "official-early-only"
             else:
                 kind = "mismatch"
-            disagree_rows.append((idx, official, mine_comp, sorted(diverged), kind))
+            disagree_rows.append((prev, curr, official, mine_comp, sorted(diverged), kind))
 
-        for kind, n in Counter(r[4] for r in disagree_rows).most_common():
+        for kind, n in Counter(r[5] for r in disagree_rows).most_common():
             print(f"  {kind:20s} {n}")
         print()
-        for idx, official, mine_comp, diverged, kind in disagree_rows:
-            print(f"  pair {idx:3d}  official={official!s:10s} mine={mine_comp!s:10s} "
+        for prev, curr, official, mine_comp, diverged, kind in disagree_rows:
+            prev_id = prev.get("response_id", "?")[:12]
+            print(f"  {prev_id} → {curr.get('response_id', '?')[:12]:12s} "
+                  f"official={official!s:10s} mine={mine_comp!s:10s} "
                   f"diverged={diverged}  [{kind}]")
         print()
 
-    # Known-reasonable differences are not errors, but must be reported apart.
-    print("known-reasonable (not counted against AC1):")
-    for bucket in ("unavailable", "previous_message_not_found", "pending",
-                   "first_turn", "cross_session"):
-        n = sum(1 for *_, b in pairs if b == bucket)
-        if n:
-            print(f"  {bucket:26s} {n}")
-
-    # What did we find in the `unavailable` cases? The docs say params-only
-    # changes surface as `unavailable`, so params should dominate.
-    unavailable = [(p, c) for p, c, b in pairs if b == "unavailable"]
-    if unavailable:
-        found = Counter()
-        for prev, curr in unavailable:
-            mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
-            found["none" if mine is None else mine.component] += 1
-        print("  unavailable, broken down by our attribution:")
-        for comp, n in found.most_common():
-            print(f"    {comp:24s} {n}")
-
     if args.verbose:
-        print("\nper-pair detail (best order):")
-        for idx, (prev, curr, bucket) in enumerate(pairs):
+        print("per-pair detail (best order):")
+        for prev, curr, signal in comparable:
             mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
-            print(f"  {idx:3d}  {bucket:26s}  mine={mine!s}")
+            print(f"  {prev.get('response_id', '?')[:12]:12s} → "
+                  f"{curr.get('response_id', '?')[:12]:12s}  {signal:22s}  mine={mine!s}")
 
 
 if __name__ == "__main__":

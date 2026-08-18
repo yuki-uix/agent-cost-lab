@@ -6,11 +6,21 @@ module reproduces that attribution offline — from the two request bodies alone
 so it works for DeepSeek / OpenAI too — and drills down to the specific tool,
 message index, or field.
 
-The one rule everything else hangs on: **the cache matches bytes, not meaning.**
-``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` are semantically equal but
-byte-different, and byte-different is what a cache miss is. Comparison therefore
-never uses ``dict ==``; every node is re-serialised byte-faithfully (the same
-``json.dumps`` settings as ``proxy.serialise``) and compared as bytes.
+The rule everything else hangs on: **the cache matches the tokenised prompt,
+not the raw JSON envelope.** ``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` are
+semantically equal but byte-different — *within a node the cache is still
+byte-sensitive* — but the API normalises and tokenises the request first, so
+transport encodings that tokenise identically (``"content": "x"`` vs
+``"content": [{"type": "text", "text": "x"}]``) must be treated as identical,
+while a tool-schema key reorder must still be a divergence.
+
+Comparison therefore never uses ``dict ==``; every node is re-serialised
+byte-faithfully (the same ``json.dumps`` settings as ``proxy.serialise``), the
+evidenced equivalent encodings are canonicalised by :func:`_normalise`, and the
+result is compared as bytes. Each canonicalisation in :func:`_normalise` is
+backed by real pairs in ``data/raw/capture.jsonl`` where the cache demonstrably
+did not break (``cache_read_input_tokens`` kept climbing) — see the comments
+there; no rule is added "because it looks equivalent".
 
 The prefix itself is a *concatenation* of per-component byte strings in some
 order. That order is a hypothesis, not a fact — Anthropic's docs phrase it two
@@ -76,6 +86,66 @@ def _dump(value: object) -> bytes:
     return serialise(value)
 
 
+def _normalise_content(content: object) -> object:
+    """Canonicalise a message ``content`` to its token-equivalent form.
+
+    Two rules, each evidenced by real pairs in ``data/raw/capture.jsonl`` where
+    the cache demonstrably did not break:
+
+    *   **string  ⟺  single ``text`` block.**  Claude Code writes the same
+        ``<system-reminder>`` message as a bare string in one turn and as a
+        one-element ``[{"type": "text", "text": ...}]`` block the next. There
+        are 35 such flips in the capture (e.g. record 2→3 message 1, 3→4
+        message 4, 5→7 message 7); in every one ``cache_read_input_tokens``
+        keeps climbing (68,388 → 68,612 → 68,638 → …) — the cache never broke,
+        because the API tokenises both forms identically.
+
+    *   **drop ``cache_control`` from ``text`` blocks.**  ``cache_control``
+        marks a cache *write* breakpoint; it is not token content, so its
+        presence/absence never changes the read-side prefix match. 7 assistant
+        messages in the capture flip only this marker between turns (e.g.
+        record 4→5 message 5, 8→9 message 11) while ``cache_read_input_tokens``
+        still climbs — a moving breakpoint does not invalidate the prefix.
+
+    Everything else is passed through unchanged: a tool-schema key reorder, a
+    tool add/remove/reorder, or any change to text itself must still be a
+    divergence. Within the normalised nodes comparison remains byte-faithful.
+    """
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    if isinstance(content, list):
+        out = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                # Preserve key order; only drop the cache-breakpoint marker.
+                block = {k: v for k, v in block.items() if k != "cache_control"}
+            out.append(block)
+        content = out
+    return content
+
+
+def _normalise_message(message: object) -> object:
+    """Canonicalise one message dict for comparison (content only)."""
+    if not isinstance(message, dict) or "content" not in message:
+        return message
+    message = dict(message)
+    message["content"] = _normalise_content(message["content"])
+    return message
+
+
+def _normalise(component: str, value: object) -> object:
+    """Canonicalise a cache-prefix segment before byte comparison.
+
+    Only ``messages`` has evidenced equivalent encodings. ``tools`` is
+    deliberately left alone — a key-order change in a tool schema must still
+    surface as ``tools_changed`` (AC2), so no generic "sort keys" normalisation
+    is applied anywhere.
+    """
+    if component == "messages" and isinstance(value, list):
+        return [_normalise_message(m) for m in value]
+    return value
+
+
 def _segments(body: dict) -> dict[str, object]:
     """Split a request body into its cache-prefix components.
 
@@ -98,11 +168,13 @@ def prefix_bytes(body: dict, *, order: tuple[str, ...] = SEGMENT_ORDER) -> bytes
     """The concatenated prefix bytes for one body, in ``order``.
 
     This is the byte string the cache would key on under the chosen segment
-    order. Its length is the "total serialised bytes" that a divergence's
-    ``bytes_before`` and ``bytes_after`` must partition (AC6).
+    order: segments are canonicalised with :func:`_normalise` first, because the
+    cache keys the tokenised prompt, not the raw envelope. Its length is the
+    "total serialised bytes" that a divergence's ``bytes_before`` and
+    ``bytes_after`` must partition (AC6).
     """
     segments = _segments(body)
-    return b"".join(_dump(segments[comp]) for comp in order)
+    return b"".join(_dump(_normalise(comp, segments[comp])) for comp in order)
 
 
 def _common_prefix(a: bytes, b: bytes) -> int:
@@ -127,7 +199,10 @@ def _is_append(prev: object, curr: object) -> bool:
         return False
     if len(curr) <= len(prev):
         return False
-    return all(_dump(prev[i]) == _dump(curr[i]) for i in range(len(prev)))
+    return all(
+        _dump(_normalise_message(prev[i])) == _dump(_normalise_message(curr[i]))
+        for i in range(len(prev))
+    )
 
 
 def attribute(
@@ -147,8 +222,10 @@ def attribute(
     for component in order:
         prev_value = prev_segments[component]
         curr_value = curr_segments[component]
-        prev_bytes = _dump(prev_value)
-        curr_bytes = _dump(curr_value)
+        # Compare the token-equivalent (canonicalised) bytes, but keep the raw
+        # values for _describe so paths stay on the original structure.
+        prev_bytes = _dump(_normalise(component, prev_value))
+        curr_bytes = _dump(_normalise(component, curr_value))
         if prev_bytes == curr_bytes:
             offset += len(curr_bytes)
             continue
@@ -183,7 +260,7 @@ def diverging_components(
     for component in order:
         prev_value = prev_segments[component]
         curr_value = curr_segments[component]
-        if _dump(prev_value) == _dump(curr_value):
+        if _dump(_normalise(component, prev_value)) == _dump(_normalise(component, curr_value)):
             continue
         if component == "messages" and _is_append(prev_value, curr_value):
             continue

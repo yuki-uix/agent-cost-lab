@@ -66,6 +66,17 @@ def _stream(stop_after=None):
     return asyncio.run(run())
 
 
+def _post(body, headers=None):
+    async def run():
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            async with c.stream("POST", f"{PROXY}/v1/messages", json=body,
+                                headers=headers or {}) as r:
+                async for _ in r.aiter_lines():
+                    pass
+
+    return asyncio.run(run())
+
+
 def _records(capture: Path) -> list[dict]:
     return [json.loads(l) for l in capture.read_text().splitlines()]
 
@@ -95,6 +106,44 @@ def test_previous_message_id_threads_across_turns(servers):
     assert seen["last_body"]["diagnostics"]["previous_message_id"] == "msg_fake_01"
     rec = _records(servers)[-1]
     assert rec["diagnostics"]["cache_miss_reason"]["type"] == "system_changed"
+
+
+def test_fresh_lineage_gets_null_previous_message_id(servers):
+    """A lineage with no prior successful response must not inherit the id of
+    some other conversation's last message."""
+    body = {**BODY, "messages": [{"role": "user", "content": "fresh-lineage-null"}]}
+    _post(body)
+    seen = httpx.get(f"{UPSTREAM}/_last", timeout=5).json()
+    assert seen["last_body"]["diagnostics"]["previous_message_id"] is None
+
+
+def test_interleaved_lineages_do_not_cross_thread(servers):
+    """Two conversations sharing one proxy must stay separate: a turn in lineage
+    B must never be threaded to lineage A's previous message, and vice versa."""
+    a = {**BODY, "messages": [{"role": "user", "content": "task-a"}]}
+    b = {**BODY, "messages": [{"role": "user", "content": "task-b"}]}
+
+    _post(a)  # A's first turn records its response id
+    _post(b)  # B is a different lineage — must be null, not A's id
+    seen = httpx.get(f"{UPSTREAM}/_last", timeout=5).json()
+    assert seen["last_body"]["diagnostics"]["previous_message_id"] is None
+
+    _post(a)  # back to A: still its own id, not reset by B's interleave
+    seen = httpx.get(f"{UPSTREAM}/_last", timeout=5).json()
+    assert seen["last_body"]["diagnostics"]["previous_message_id"] == "msg_fake_01"
+
+
+def test_lineage_key_is_model_and_first_message_only():
+    """The trap: hashing system/tools would split a lineage exactly when the
+    system prompt changes mid-conversation. The key must ignore both."""
+    from agentcostlab.proxy import _lineage_key
+
+    base = {"model": "claude-sonnet-5",
+            "messages": [{"role": "user", "content": "seed"}]}
+    k = _lineage_key(base)
+    assert _lineage_key({**base, "system": "changed", "tools": [{"name": "x"}]}) == k
+    assert _lineage_key({**base, "messages": [{"role": "user", "content": "other"}]}) != k
+    assert _lineage_key({**base, "model": "claude-opus-5"}) != k
 
 
 def test_client_disconnect_propagates_and_still_records(servers):

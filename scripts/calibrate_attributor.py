@@ -140,7 +140,7 @@ def main() -> None:
         for prev, curr, signal in comparable:
             official = None if signal == "no_divergence" else OFFICIAL_TO_COMPONENT.get(signal)
             mine = attribute(prev["request_body"], curr["request_body"], order=perm)
-            mine_comp = None if mine is None else mine.component
+            mine_comp = None if (mine is None or mine.suppressed) else mine.component
             if mine_comp == official:
                 agree += 1
             else:
@@ -165,6 +165,15 @@ def main() -> None:
           f"agreement {best_rate:.1%} ({best_agree}/{best_total})")
     print()
 
+    suppressed = 0
+    for prev, curr, _ in comparable:
+        mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
+        if mine is not None and mine.suppressed:
+            suppressed += 1
+    print(f"suppressed (text diverged after the last cache_control block, cache intact): "
+          f"{suppressed}")
+    print()
+
     # Disagreement breakdown for the best order: what did we report that the
     # cache signal did not, and vice versa?
     print("disagreement breakdown (best order):")
@@ -175,7 +184,7 @@ def main() -> None:
         for prev, curr, signal in comparable:
             official = None if signal == "no_divergence" else OFFICIAL_TO_COMPONENT.get(signal)
             mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
-            mine_comp = None if mine is None else mine.component
+            mine_comp = None if (mine is None or mine.suppressed) else mine.component
             if mine_comp == official:
                 continue
             diverged = set(diverging_components(prev["request_body"], curr["request_body"]))

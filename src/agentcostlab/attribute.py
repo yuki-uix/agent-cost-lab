@@ -27,6 +27,14 @@ order. That order is a hypothesis, not a fact — Anthropic's docs phrase it two
 ways ("tools, system, messages" on the prompt-caching page, "model, system,
 tools" on the cache-diagnostics page). It lives in :data:`SEGMENT_ORDER` and is
 measured, not assumed, by ``scripts/calibrate_attributor.py``.
+
+Two questions were once conflated: "did the text change?" and "did the cache
+break?" They are different. ``cache_control`` marks the *end* of the cacheable
+prefix — everything after the request's last ``cache_control`` block is a
+cache-*write* tail that was never in the cache. A divergence that falls after
+that marker is therefore a text change that does **not** break the cache: the
+attributor returns it ``suppressed`` (still visible to the caller, not counted
+as a miss) instead of reporting a cache break.
 """
 from __future__ import annotations
 
@@ -71,6 +79,7 @@ class Divergence:
     path: list[str | int]   # structured location, e.g. ["tools", 3, "input_schema"]
     bytes_before: int       # bytes of the current prefix before the divergence (cached)
     bytes_after: int        # bytes after it (repriced at list price)
+    suppressed: bool = False  # text diverged after the last cache_control block: cache intact
 
 
 def _dump(value: object) -> bytes:
@@ -205,6 +214,114 @@ def _is_append(prev: object, curr: object) -> bool:
     )
 
 
+def _dict_value_offset(mapping: dict, key: str) -> int | None:
+    """Byte offset within ``serialise(mapping)`` where ``key``'s value begins.
+
+    ``serialise`` is deterministic and preserves key order, so walking the dict
+    and summing ``len(serialise(k)) + 1`` for each ``"key":`` before the target
+    yields the exact position — no re-serialisation guesswork.
+    """
+    offset = 1  # '{'
+    for k, v in mapping.items():
+        entry_start = offset + (0 if offset == 1 else 1)  # ',' before entries 2..n
+        if k == key:
+            return entry_start + len(serialise(k)) + 1  # value starts after '"key":'
+        offset = entry_start + len(serialise(k)) + 1 + len(serialise(v))
+    return None
+
+
+def _list_breakpoint_end(value: object) -> int | None:
+    """End byte offset (within ``serialise(value)``) of the last element carrying
+    a ``cache_control`` key, or ``None``.
+
+    For ``system`` and ``tools`` — both lists of blocks/tools that ``_normalise``
+    leaves untouched — raw and normalised bytes coincide, so block end offsets
+    are just ``serialise`` lengths accumulated over the list.
+    """
+    if not isinstance(value, list):
+        return None
+    inner = 1  # '['
+    last = None
+    for block in value:
+        end = inner + len(serialise(block))
+        if isinstance(block, dict) and "cache_control" in block:
+            last = end
+        inner = end + 1  # ','
+    return last
+
+
+def _content_breakpoint_end(
+    message_offset: int, content_offset: int, raw_content: list, norm_content: list
+) -> int | None:
+    """Absolute end byte offset of the last ``cache_control`` block in one
+    message's ``content``, or ``None``.
+
+    ``raw_content`` and ``norm_content`` have the same length — normalisation
+    drops keys, never whole blocks — so block ``j`` is breakpoint-marked iff the
+    raw block ``j`` carries ``cache_control``, and its normalised end offset is
+    walked from ``serialise(norm_content[j])``.
+    """
+    inner = 1  # '[' of the content list
+    last = None
+    for j, raw_block in enumerate(raw_content):
+        end = inner + len(serialise(norm_content[j]))
+        if isinstance(raw_block, dict) and "cache_control" in raw_block:
+            last = message_offset + content_offset + end
+        inner = end + 1  # ','
+    return last
+
+
+def _messages_breakpoint_end(messages: object) -> int | None:
+    """End byte offset (within ``serialise`` of the normalised messages list) of
+    the last ``cache_control``-bearing content block, or ``None``."""
+    if not isinstance(messages, list):
+        return None
+    offset = 1  # '['
+    last = None
+    for raw_message in messages:
+        norm_message = _normalise_message(raw_message)
+        message_bytes = serialise(norm_message)
+        if isinstance(raw_message, dict) and isinstance(norm_message, dict):
+            raw_content = raw_message.get("content")
+            if isinstance(raw_content, list) and "content" in norm_message:
+                content_offset = _dict_value_offset(norm_message, "content")
+                if content_offset is not None:
+                    end = _content_breakpoint_end(
+                        offset, content_offset, raw_content, norm_message["content"]
+                    )
+                    if end is not None:
+                        last = end
+        offset += len(message_bytes) + 1  # ','
+    return last
+
+
+def _cache_breakpoint_offset(
+    segments: dict[str, object], *, order: tuple[str, ...]
+) -> int | None:
+    """Byte offset of the end of the last ``cache_control``-bearing block, or ``None``.
+
+    Measured in the same normalised byte space as :func:`prefix_bytes`, so it is
+    directly comparable to a divergence's ``bytes_before``. ``cache_control``
+    marks the end of the cacheable prefix; anything after the last marker is a
+    cache-*write* tail, so a divergence there does not break the cache.
+    """
+    offset = 0
+    last = None
+    for component in order:
+        raw = segments[component]
+        norm = _normalise(component, raw)
+        if component == "messages":
+            rel = _messages_breakpoint_end(raw)
+        elif component in ("system", "tools"):
+            rel = _list_breakpoint_end(raw)
+        else:
+            rel = None
+        if rel is not None:
+            last = offset + rel
+        offset += len(_dump(norm))
+    return last
+
+
 def attribute(
     prev_body: dict, curr_body: dict, *, order: tuple[str, ...] = SEGMENT_ORDER
 ) -> Divergence | None:
@@ -213,19 +330,25 @@ def attribute(
     ``None`` means "no divergence": the two prefixes are byte-identical, or the
     only difference is messages appended onto the end (the normal per-turn
     growth, which Anthropic likewise reports as "no divergence").
+
+    A divergence that falls *after* the prev request's last ``cache_control``
+    block is a text change in the non-cached tail: it is still returned (with
+    ``suppressed=True``) so the caller can see it, but it did not break the
+    cache. A plain ``Divergence`` means the cache did break.
     """
     prev_segments = _segments(prev_body)
     curr_segments = _segments(curr_body)
     total = len(prefix_bytes(curr_body, order=order))
+    breakpoint = _cache_breakpoint_offset(prev_segments, order=order)
 
     offset = 0  # bytes of curr's prefix consumed before the current segment
     for component in order:
         prev_value = prev_segments[component]
         curr_value = curr_segments[component]
-        # Compare the token-equivalent (canonicalised) bytes, but keep the raw
-        # values for _describe so paths stay on the original structure.
-        prev_bytes = _dump(_normalise(component, prev_value))
-        curr_bytes = _dump(_normalise(component, curr_value))
+        prev_norm = _normalise(component, prev_value)
+        curr_norm = _normalise(component, curr_value)
+        prev_bytes = _dump(prev_norm)
+        curr_bytes = _dump(curr_norm)
         if prev_bytes == curr_bytes:
             offset += len(curr_bytes)
             continue
@@ -235,13 +358,17 @@ def attribute(
             continue
 
         within = _common_prefix(prev_bytes, curr_bytes)
-        detail, path = _describe(component, prev_value, curr_value)
+        # _describe must see the same normalised values the comparison used. The
+        # old raw-value call reported a cache_control difference the comparison
+        # had already discarded — 25 of the 26 real over-reports pointed there.
+        detail, path = _describe(component, prev_norm, curr_norm)
         return Divergence(
             component=component,
             detail=detail,
             path=path,
             bytes_before=offset + within,
             bytes_after=total - (offset + within),
+            suppressed=breakpoint is not None and offset + within >= breakpoint,
         )
     return None
 

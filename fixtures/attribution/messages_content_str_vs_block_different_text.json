@@ -24,7 +24,7 @@
   },
   "expected": {
     "component": "messages",
-    "path": ["messages", 2, "content"],
+    "path": ["messages", 2, "content", 0, "text"],
     "detail_contains": ["message 2"]
   }
 }

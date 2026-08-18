@@ -1,0 +1,35 @@
+{
+  "name": "messages_after_breakpoint",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [
+        {"type": "text", "text": "done", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+      ]},
+      {"role": "user", "content": "old question"}
+    ],
+    "tools": []
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [
+        {"type": "text", "text": "done", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+      ]},
+      {"role": "user", "content": "new question"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "component": "messages",
+    "path": ["messages", 2, "content", 0, "text"],
+    "suppressed": true,
+    "detail_contains": ["message 2", "text differs"]
+  }
+}

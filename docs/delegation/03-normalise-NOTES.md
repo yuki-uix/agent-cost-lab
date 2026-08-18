@@ -127,16 +127,26 @@ itself must still be a divergence."
 
 ### A finding worth flagging
 
-All 26 changed messages are the **final user message** of the previous request,
-and for all 62 comparable turns `curr.cache_read == prev.cache_read +
-prev.cache_creation` — the cache read back the *complete* previous prefix even
-across these text changes. In other words, the data hints these trailing-text
-edits live after the `cache_control` breakpoint (the non-cached tail) and do
-**not** actually invalidate the cache.
+**19 of the 26** changed messages are the final user message of the previous
+request; the remaining **7 sit at the second-to-last message** (message 5 of 7,
+11 of 13, 17 of 19, 23 of 25). For all 62 comparable turns
+`curr.cache_read == prev.cache_read + prev.cache_creation` — the cache read back
+the *complete* previous prefix even across these text changes.
+
+So the data hints that the 19 trailing edits live after the `cache_control`
+breakpoint (the non-cached tail) and do **not** invalidate the cache. **The
+other 7 are not explained by that story** — they are earlier in the message
+list, so either the breakpoint sits further back than assumed, or a different
+mechanism is at work.
+
+*(Corrected during review: the first draft claimed all 26 were the final
+message. That overstated how much the proposal below would fix — 19/26, not
+26/26 — and it overstated it in the direction that favoured the proposal.)*
 
 A further normalisation — "ignore messages after the last `cache_control`
-breakpoint" — would plausibly close most of the remaining 26, but it would
-collapse genuine text changes, which the spec's iron rule forbids. I did not
+breakpoint" — would plausibly close the 19 trailing-edit cases, but not the 7
+earlier ones, and it would collapse genuine text changes, which the spec's iron
+rule forbids. I did not
 implement it; it is the top open question below.
 
 ## 5. Uncertainties

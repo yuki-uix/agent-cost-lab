@@ -25,6 +25,7 @@ def load(path: Path) -> list[dict]:
 
 def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     ok, bad = [], []
+    undecidable = None
     served = [r for r in rows if r.get("status_code") == 200]
     errs = [r for r in rows if r.get("error")]
     with_usage = [r for r in served if r.get("usage")]
@@ -97,42 +98,89 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     gate(len(threaded) >= 2,
          f"{len(threaded)} requests carried previous_message_id"
          + ("" if len(threaded) >= 2 else "  <- too short to compare anything"))
-    # Presence of the field, not presence of a divergence. A session with zero
-    # misses is legitimate data — 1.2 asks what share of turns diverge, and a
-    # clean session is its denominator. Demanding a verdict would reject it, and
-    # push whoever is capturing to re-run until a divergence happens, biasing
-    # the very number this data is for. An absent field means the beta header
-    # never took effect; null means compared and clean.
-    answered = [r for r in rows
-                if r.get("injected_previous_message_id") and "diagnostics" in r]
-    gate(bool(answered),
-         f"{len(answered)} threaded turns carried a diagnostics field"
-         + ("" if answered else "  <- beta header never took effect"))
-    # "Field present" is not "verdict obtained". These three mean the comparison
-    # did not succeed: no stored fingerprint, could not be located, or still
-    # running. A capture made entirely of them has zero comparable samples.
+    # Did upstream return a `diagnostics` key at all?
     #
-    # The 30% threshold is not invented here — it is the kill criterion locked
-    # into predictions.md before any experiment ran. Health check and
-    # pre-registered plan are deliberately the same number; if an erratum ever
-    # revises it there, this must follow.
+    # This gate used to read `"diagnostics" in r`, which is true for every
+    # record ever written: proxy.py initialises the key to None when it builds
+    # the record, before the request is even sent. It could not fail. Worse,
+    # both parsers stored `msg.get("diagnostics")`, so "upstream omitted the
+    # key" and "upstream said null" arrived here as the same None — and those
+    # mean opposite things: beta header dead, versus compared and cache hit.
+    #
+    # proxy.py now records `diagnostics_present` separately. Captures made
+    # before that carry None and cannot be judged either way; say so rather
+    # than passing them.
+    recorded = [r for r in threaded if r.get("diagnostics_present") is not None]
+    replied = [r for r in recorded if r["diagnostics_present"]]
+    if recorded:
+        gate(bool(replied),
+             f"upstream returned a diagnostics key on {len(replied)}/{len(recorded)}"
+             " threaded turns"
+             + ("" if replied else "  <- beta header never took effect"))
+    elif threaded:
+        undecidable = ("beta effectiveness UNDECIDABLE: this capture predates"
+                       " diagnostics_present, and a null diagnostics is"
+                       " indistinguishable from an absent one")
+
+    # "Key returned" is not "verdict obtained", and a verdict is not a miss.
+    # A session with zero misses is legitimate data — 1.2 asks what share of
+    # turns diverge, and a clean session is its denominator. Demanding a
+    # divergence would push whoever is capturing to re-run until something
+    # breaks, biasing the very number the data is for.
+    #
+    # The 30% threshold and its denominator are NOT chosen here. predictions.md
+    # locked "if unavailable / previous_message_not_found exceeds 30% *of
+    # turns*" before any experiment ran, so the denominator is threaded turns.
+    # Recomputing it over some other population after seeing the data is the
+    # exact move that file exists to prevent.
     INCONCLUSIVE = ("previous_message_not_found", "unavailable")
-    inconclusive = [r for r in rows
-                    if isinstance(r.get("diagnostics"), dict)
-                    and ((r["diagnostics"].get("cache_miss_reason") or {}).get("type")
-                         in INCONCLUSIVE
-                         or r["diagnostics"].get("cache_miss_reason") is None)]
-    gate(not answered or len(inconclusive) <= 0.30 * len(answered),
-         f"{len(inconclusive)}/{len(answered)} verdicts inconclusive"
-         + ("" if not answered or len(inconclusive) <= 0.30 * len(answered)
-            else "  <- over the 30% kill criterion in predictions.md"))
+
+    def _inconclusive(r: dict) -> bool:
+        """The comparison was attempted and did not yield a reason."""
+        d = r.get("diagnostics")
+        if not isinstance(d, dict):
+            return False        # null diagnostics is a clean hit, not a failure
+        reason = d.get("cache_miss_reason")
+        return reason is None or (reason or {}).get("type") in INCONCLUSIVE
+
+    # Counted over `threaded`, not over `rows`. Iterating all rows against a
+    # threaded denominator let the ratio exceed 1 (a first turn carrying an
+    # inconclusive verdict entered the numerator but not the denominator) —
+    # the same mixed-population error this file was just rewritten to remove.
+    inconclusive = [r for r in threaded if _inconclusive(r)]
+    over = bool(threaded) and len(inconclusive) > 0.30 * len(threaded)
+    gate(not over,
+         f"{len(inconclusive)}/{len(threaded)} threaded turns came back"
+         " unavailable / previous_message_not_found / no reason"
+         + ("  <- over the 30% kill criterion in predictions.md" if over else ""))
 
     gate(len(main) >= 10,
          f"largest lineage has {len(main)} turns"
          + ("" if len(main) >= 10 else "  <- need a longer session"))
 
+    # What this capture can and cannot answer. One "USABLE" bit was too coarse:
+    # a clean session fully supports 1.2 and supports 1.1 and #10 not at all,
+    # and printing a single verdict hid a capture with zero official verdicts
+    # behind ten green lines.
+    # `verdicts` includes `unavailable` and `previous_message_not_found`, which
+    # this same file defines as the comparison having failed. Counting them as
+    # support would green-light 1.1 and #10 on a capture holding zero usable
+    # reasons — the wrong-population error this rewrite exists to remove.
+    conclusive = [v for v in verdicts if v not in INCONCLUSIVE]
+    has_verdict = bool(conclusive)
+    _why = (f"needs >=1 conclusive official verdict, has {len(conclusive)}"
+            + (f" ({len(verdicts) - len(conclusive)} inconclusive)"
+               if len(verdicts) != len(conclusive) else ""))
+    supports = [
+        ("E1 1.2  divergence rate", bool(threaded),
+         f"{len(threaded)} threaded turns; a clean session is legitimate data"),
+        ("E1 1.1  miss-cause distribution", has_verdict, _why),
+        ("#10     calibration vs official", has_verdict, _why),
+    ]
     stats = {"lineages": len(lineages), "main_turns": len(main),
-             "verdicts": collections.Counter(verdicts)}
+             "threaded": len(threaded), "verdicts": collections.Counter(verdicts),
+             "n_verdicts": len(conclusive), "supports": supports,
+             "undecidable": undecidable}
     return ok, bad, stats
 
 
@@ -150,11 +198,32 @@ def main() -> int:
         print(f"  PASS  {line}")
     for line in bad:
         print(f"  FAIL  {line}")
+    if stats["undecidable"]:
+        print(f"  ----  {stats['undecidable']}")
     print(f"\n  lineages={stats['lineages']}  main_lineage_turns={stats['main_turns']}")
-    if stats["verdicts"]:
-        print(f"  verdicts: {dict(stats['verdicts'])}")
-    print("\n" + ("USABLE for E1" if not bad else "NOT USABLE — do not spend analysis time on this"))
-    return 0 if not bad else 2
+    # Printed unconditionally. When this was inside `if stats["verdicts"]`, the
+    # one number that mattered — zero — was the one number that never appeared.
+    print(f"  official verdicts obtained: {stats['n_verdicts']}"
+          f" of {stats['threaded']} threaded turns"
+          + (f"  {dict(stats['verdicts'])}" if stats["verdicts"] else ""))
+    if not stats["n_verdicts"] and stats["threaded"]:
+        print("      zero verdicts is consistent with a clean session AND with a"
+              " dead beta header;")
+        print("      diagnostics_present (proxy.py) is what tells them apart.")
+
+    print("\n  supports:")
+    for label, yes, why in stats["supports"]:
+        print(f"    {'YES' if yes else 'NO '}  {label:34s} {why}")
+
+    if bad:
+        print("\nNOT USABLE — do not spend analysis time on this")
+        return 2
+    usable = [label for label, yes, _ in stats["supports"] if yes]
+    blocked = [label for label, yes, _ in stats["supports"] if not yes]
+    print("\nUSABLE for " + ", ".join(l.split("  ")[0] for l in usable)
+          + ("" if not blocked else
+             "  —  not for " + ", ".join(l.split("  ")[0] for l in blocked)))
+    return 0
 
 
 if __name__ == "__main__":

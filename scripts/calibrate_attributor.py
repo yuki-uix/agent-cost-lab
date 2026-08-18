@@ -126,13 +126,48 @@ def main() -> None:
     )
 
     comparable = [(p, c, s) for p, c, s in pairs if s is not None]
+    from_official = sum(1 for _, c, _ in comparable if c.get("diagnostics"))
+    buckets = Counter(s for *_, s in comparable)
     print(f"records: {len(records)}   pairs (by injected_previous_message_id): {len(pairs)}")
     print(f"official signal: {signal_name}")
     print(f"comparable pairs (signal present): {len(comparable)}")
+    print(f"  from official diagnostics: {from_official}"
+          f"   from the usage fallback: {len(comparable) - from_official}")
     print("signal buckets:")
-    for bucket, n in Counter(s for *_, s in comparable).most_common():
+    for bucket, n in buckets.most_common():
         print(f"  {bucket:26s} {n}")
     print()
+
+    # A ground truth with one class cannot rank anything. On the 2026-08-18
+    # capture every comparable pair is "no_divergence", so a function that
+    # always answers "did not break" scores 100% — and that number was reported
+    # as the attributor's agreement rate. Refuse to print a rate rather than
+    # print one that a constant would match.
+    if len(buckets) < 2:
+        only, n = next(iter(buckets.items()))
+        print("DEGENERATE GROUND TRUTH — no agreement rate reported.")
+        print(f"  all {n} comparable pairs are `{only}`.")
+        print("  a constant-`{}` attributor scores {}/{} = 100.0% against this,"
+              .format(only, n, n))
+        print("  so any rate computed here measures nothing about the attributor.")
+        if not from_official:
+            print("  none of it came from official diagnostics: this capture has 0"
+                  " verdicts.")
+        print("\nWhat this capture CAN show, run under the default order:")
+        d = Counter()
+        for prev, curr, _ in comparable:
+            mine = attribute(prev["request_body"], curr["request_body"])
+            d["no divergence" if mine is None
+              else "suppressed (cache intact)" if mine.suppressed
+              else f"reported break: {mine.component}"] += 1
+        for k, v in d.most_common():
+            print(f"  {v:>4}  {k}")
+        print("\nTo calibrate against `cache_miss_reason`, capture a session in"
+              " which the cache")
+        print("actually breaks: switch model, /compact, add or remove an MCP"
+              " server, edit the")
+        print("system prompt, or idle past the cache TTL.")
+        return
 
     results = []
     for perm in itertools.permutations(COMPONENTS):

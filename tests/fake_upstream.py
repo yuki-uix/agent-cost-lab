@@ -50,6 +50,19 @@ async def messages(request: Request):
             return Response(content=payload, media_type="text/event-stream")
         return Response(content=_gz.compress(payload), media_type="text/event-stream",
                         headers={"content-encoding": "gzip"})
+    # An upstream that does not know the beta at all: no `diagnostics` key in
+    # the reply, as opposed to the key present and null. The proxy must record
+    # the difference; collapsing both to None is what left the health gate
+    # unable to tell a clean session from a dead instrument.
+    if body.get("model") == "no-diagnostics-key":
+        payload = (b'event: message_start\ndata: ' + json.dumps({
+            "type": "message_start",
+            "message": {"id": "msg_nodiag", "type": "message", "role": "assistant",
+                        "content": [], "usage": {"input_tokens": 9, "output_tokens": 1,
+                        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}},
+        }).encode() + b'\n\n')
+        return Response(content=payload, media_type="text/event-stream")
+
     if body.get("stream") is False:
         return JSONResponse({"id": "msg_fake_json", "type": "message",
                              "role": "assistant", "content": [],

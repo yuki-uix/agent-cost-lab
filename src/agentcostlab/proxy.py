@@ -132,6 +132,13 @@ async def messages(request: Request):
         "tool_names": [t.get("name") for t in body.get("tools", [])],
         "usage": None,
         "diagnostics": None,
+        # Whether upstream's reply carried a `diagnostics` key at all, as
+        # opposed to carrying it with a null value. Those two mean opposite
+        # things — "the beta never took effect" versus "compared, cache hit" —
+        # and `msg.get("diagnostics")` collapses them both to None. Without
+        # this the health gate cannot tell a clean session from a dead
+        # instrument, which is exactly what it exists to do.
+        "diagnostics_present": None,
         "response_id": None,
         "first_byte_ms": None,
         "status_code": None,
@@ -259,6 +266,7 @@ def _parse_start(buf: bytes, record: dict) -> bool:
                 continue
             record["usage"] = msg.get("usage")
             record["diagnostics"] = msg.get("diagnostics")
+            record["diagnostics_present"] = "diagnostics" in msg
             record["response_id"] = msg.get("id")
             LAST_ID[_lineage_key(record.get("request_body", {}))] = msg.get("id")
             return True
@@ -282,6 +290,7 @@ def _parse_json_body(buf: bytes, record: dict) -> None:
         return
     record["usage"] = msg.get("usage")
     record["diagnostics"] = msg.get("diagnostics")
+    record["diagnostics_present"] = "diagnostics" in msg
     record["response_id"] = msg.get("id")
     if msg.get("id"):
         LAST_ID[_lineage_key(record.get("request_body", {}))] = msg["id"]

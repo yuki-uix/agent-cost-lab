@@ -87,13 +87,63 @@ def test_a_session_with_zero_divergences_is_usable():
     assert not bad, bad
 
 
-def test_missing_diagnostics_field_fails():
-    """Absent field means the beta header never took effect — that is a defect."""
+def test_upstream_never_returning_a_diagnostics_key_fails():
+    """Upstream omitting the key means the beta header never took effect.
+
+    The old version of this test popped `diagnostics` off the record and
+    asserted the gate caught it — but proxy.py initialises that key when it
+    builds the record, so no real capture can ever be missing it. The test
+    exercised a shape the instrument cannot produce, and the gate it guarded
+    could not fail on real data.
+    """
     rows = healthy()
     for r in rows:
-        r.pop("diagnostics", None)
+        r["diagnostics"] = None
+        r["diagnostics_present"] = False
     _, bad, _ = health.check(rows)
-    assert any("diagnostics field" in b for b in bad)
+    assert any("diagnostics key" in b for b in bad), bad
+
+
+def test_a_null_diagnostics_with_the_key_present_is_a_clean_hit():
+    """null means compared-and-hit, not broken. Proven in the wild: capture
+    attempt3 carries null and dict verdicts in one file, and every null record
+    has a healthy cache_read_input_tokens."""
+    rows = healthy()
+    for r in rows:
+        r["diagnostics"] = None
+        r["diagnostics_present"] = True
+    _, bad, _ = health.check(rows)
+    assert not bad, bad
+
+
+def test_a_capture_predating_the_field_is_undecidable_not_passing():
+    """Silence is not a pass. Records with no `diagnostics_present` at all
+    cannot say whether the beta took effect, and must not claim to."""
+    rows = healthy()
+    for r in rows:
+        r["diagnostics"] = None
+        r.pop("diagnostics_present", None)
+    ok, bad, stats = health.check(rows)
+    assert stats["undecidable"], "a legacy capture must be reported as undecidable"
+    assert not any("diagnostics key" in line for line in ok), \
+        "must not report the beta as verified when it cannot be"
+
+
+def test_zero_verdicts_blocks_1_1_and_10_but_not_1_2():
+    """One USABLE bit was too coarse: this is the shape of the 2026-08-18
+    capture, which supports the divergence rate and nothing that needs an
+    official reason."""
+    rows = healthy()
+    for r in rows:
+        r["diagnostics"] = None
+        r["diagnostics_present"] = True
+    _, bad, stats = health.check(rows)
+    assert not bad, bad
+    assert stats["n_verdicts"] == 0
+    supports = {label.split("  ")[0]: yes for label, yes, _ in stats["supports"]}
+    assert supports["E1 1.2"] is True
+    assert supports["E1 1.1"] is False
+    assert supports["#10"] is False
 
 
 def test_predecessor_outside_the_capture_is_not_silently_accepted():
@@ -112,7 +162,7 @@ def test_all_inconclusive_verdicts_fail(reason):
     for r in rows:
         r["diagnostics"] = {"cache_miss_reason": {"type": reason} if reason else None}
     _, bad, _ = health.check(rows)
-    assert any("inconclusive" in b for b in bad)
+    assert any("unavailable / previous_message_not_found" in b for b in bad)
 
 
 def test_a_few_inconclusive_verdicts_are_tolerated():
@@ -122,7 +172,7 @@ def test_a_few_inconclusive_verdicts_are_tolerated():
         r["diagnostics"] = None
     rows[4]["diagnostics"] = {"cache_miss_reason": {"type": "unavailable"}}
     _, bad, _ = health.check(rows)
-    assert not any("inconclusive" in b for b in bad), bad
+    assert not any("over the 30% kill criterion" in b for b in bad), bad
 
 
 def test_client_aborted_request_is_not_counted_as_lost_usage():
@@ -144,3 +194,39 @@ def test_usage_lost_after_a_complete_stream_fails():
     rows[4]["usage"] = None
     _, bad, _ = health.check(rows)
     assert any("lost after a complete stream" in b for b in bad)
+
+
+def test_inconclusive_verdicts_do_not_count_as_support():
+    """`unavailable` and `previous_message_not_found` mean the comparison did
+    not succeed. Counting them as verdicts green-lights 1.1 and #10 on a
+    capture holding zero usable reasons — the wrong-population error this
+    whole gate was rewritten to remove, reproduced in the replacement."""
+    rows = healthy()
+    for r in rows:
+        r["diagnostics"] = None
+        r["diagnostics_present"] = True
+    rows[3]["diagnostics"] = {"cache_miss_reason": {"type": "unavailable"}}
+    rows[4]["diagnostics"] = {"cache_miss_reason": {"type": "previous_message_not_found"}}
+
+    _, bad, stats = health.check(rows)
+    assert not bad, "2 of 11 is under the 30% kill criterion; this is not a failure"
+    assert stats["n_verdicts"] == 0, "neither is a usable reason"
+    supports = {label.split("  ")[0]: yes for label, yes, _ in stats["supports"]}
+    assert supports["E1 1.1"] is False
+    assert supports["#10"] is False
+
+
+def test_the_inconclusive_ratio_cannot_exceed_one():
+    """Numerator over all rows, denominator over threaded ones, printed as
+    'N/M threaded turns'. A first turn carrying an inconclusive verdict made
+    that ratio 12/11."""
+    rows = healthy()
+    for r in rows:
+        r["diagnostics"] = {"cache_miss_reason": None}
+        r["diagnostics_present"] = True
+
+    _, bad, _ = health.check(rows)
+    line = next(b for b in bad if "threaded turns came back" in b)
+    num, denom = line.split(" ")[0].split("/")
+    assert int(num) <= int(denom), line
+    assert int(denom) == sum(1 for r in rows if r["injected_previous_message_id"])

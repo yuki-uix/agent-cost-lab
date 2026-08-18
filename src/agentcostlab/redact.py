@@ -34,6 +34,7 @@ POLICIES: dict[str, Policy] = {
     "first_byte_ms": Policy.KEEP,
     "usage": Policy.KEEP,
     "diagnostics": Policy.KEEP,
+    "diagnostics_present": Policy.KEEP,
     "injected_previous_message_id": Policy.KEEP,
     "response_id": Policy.KEEP,
     "status_code": Policy.KEEP,

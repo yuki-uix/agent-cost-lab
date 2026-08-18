@@ -259,7 +259,7 @@ def test_a_clean_session_with_no_key_is_undecidable_not_condemned():
     ok, bad, stats = health.check(rows)
     assert not bad, "a clean session must not be condemned on an unknown semantics"
     assert stats["undecidable"], stats
-    assert "identical from here" in stats["undecidable"]
+    assert any("identical from here" in u for u in stats["undecidable"])
 
 
 def test_a_turn_that_lost_the_cache_without_a_key_condemns_the_beta():
@@ -313,7 +313,7 @@ def test_partial_vintage_capture_is_reported_not_silently_narrowed():
         r.pop("diagnostics_present", None)
     _, _, stats = health.check(rows)
     assert stats["undecidable"], "a mixed-vintage capture must say so"
-    assert "/11 answerable" in stats["undecidable"], stats["undecidable"]
+    assert any("/11 answerable" in u for u in stats["undecidable"]), stats["undecidable"]
 
 
 @pytest.mark.parametrize("diagnostics,kind", [
@@ -332,3 +332,16 @@ def test_every_counted_condition_is_named_in_the_message(diagnostics, kind):
     line = next(b for b in bad if "threaded turns came back" in b)
     assert kind in line, f"{kind!r} is counted but not named in: {line}"
     assert line.startswith("11/11"), line
+
+
+def test_both_undecidable_conditions_survive_together():
+    """They are independent: some turns predate the field, and the ones that
+    do carry it never got a key. Assigning to a single slot let the second
+    discard the first."""
+    rows = _answered(healthy(n=20), present=False)
+    for r in rows[10:]:
+        r.pop("diagnostics_present", None)
+    _, _, stats = health.check(rows)
+    assert len(stats["undecidable"]) == 2, stats["undecidable"]
+    assert any("identical from here" in u for u in stats["undecidable"])
+    assert any("predate" in u for u in stats["undecidable"])

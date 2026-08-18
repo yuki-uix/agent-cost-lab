@@ -42,7 +42,10 @@ def _broke_cache(record: dict, by_response_id: dict) -> bool:
 
 def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     ok, bad = [], []
-    undecidable = None
+    # A list, not a slot: the two conditions below are independent and can
+    # both hold on one capture. Assigning would let the second silently
+    # discard the first — the same overwrite the `error` field still has.
+    undecidable: list[str] = []
     served = [r for r in rows if r.get("status_code") == 200]
     errs = [r for r in rows if r.get("error")]
     with_usage = [r for r in served if r.get("usage")]
@@ -160,18 +163,18 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
         gate(False, f"{len(witnesses)} turns lost the cache and still carried no"
                     " diagnostics key  <- beta header never took effect")
     elif recorded:
-        undecidable = ("beta effectiveness UNDECIDABLE: no answerable turn"
+        undecidable.append("beta effectiveness UNDECIDABLE: no answerable turn"
                        " carried a diagnostics key, and none of them lost the"
-                       " cache either — a silent beta and a clean session look"
-                       " identical from here")
+                           " cache either — a silent beta and a clean session"
+                           " look identical from here")
     # Reported whenever ANY answerable turn predates the field, not only when
     # they all do. Judging 1 turn and staying silent about the other 10 reads as
     # full coverage of a capture that is 90% unjudgeable.
     if unrecorded:
-        undecidable = (f"beta effectiveness UNDECIDABLE on {len(unrecorded)}"
-                       f"/{len(answerable)} answerable turns: they predate"
-                       " diagnostics_present, and a null diagnostics is"
-                       " indistinguishable from an absent one")
+        undecidable.append(f"beta effectiveness UNDECIDABLE on {len(unrecorded)}"
+                           f"/{len(answerable)} answerable turns: they predate"
+                           " diagnostics_present, and a null diagnostics is"
+                           " indistinguishable from an absent one")
 
     # "Key returned" is not "verdict obtained", and a verdict is not a miss.
     # A session with zero misses is legitimate data — 1.2 asks what share of
@@ -260,8 +263,8 @@ def main() -> int:
         print(f"  PASS  {line}")
     for line in bad:
         print(f"  FAIL  {line}")
-    if stats["undecidable"]:
-        print(f"  ----  {stats['undecidable']}")
+    for line in stats["undecidable"]:
+        print(f"  ----  {line}")
     print(f"\n  lineages={stats['lineages']}  main_lineage_turns={stats['main_turns']}")
     # Printed unconditionally. When this was inside `if stats["verdicts"]`, the
     # one number that mattered — zero — was the one number that never appeared.
@@ -270,8 +273,10 @@ def main() -> int:
           + (f"  {dict(stats['verdicts'])}" if stats["verdicts"] else ""))
     if not stats["n_verdicts"] and stats["threaded"]:
         print("      zero verdicts is consistent with a clean session AND with a"
-              " dead beta header;")
-        print("      diagnostics_present (proxy.py) is what tells them apart.")
+              " dead beta header.")
+        print("      A turn that lost the cache and still carried no diagnostics"
+              " key would settle it;")
+        print("      this capture has none, so it stays open.")
 
     print("\n  supports:")
     for label, yes, why in stats["supports"]:

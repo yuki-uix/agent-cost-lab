@@ -59,10 +59,10 @@ prediction whose terms are ambiguous cannot be scored.
 
 | # | Question | Predicted | Actual | Verdict |
 |---|---|---|---|---|
-| 1.1 | Which `cache_miss_reason` type dominates? | `messages_changed` | | |
-| 1.2 | What share of *turns* diverge at all? | 10–20% | | |
-| 1.3 | How many of the survey's 6 "cache killers" appear in real Claude Code data? | 2 of 6 | | |
-| 1.4 | Will the self-built attributor hit ≥90% agreement on its first run? | **No** — 70–85%, needs one iteration | | |
+| 1.1 | Which `cache_miss_reason` type dominates? | `messages_changed` | no samples — 0 divergences in this capture | not yet answerable |
+| 1.2 | What share of *turns* diverge at all? | 10–20% | **0%** (0 of 63 comparable turns) | WRONG |
+| 1.3 | How many of the survey's 6 "cache killers" appear in real Claude Code data? | 2 of 6 | **1** (compaction only); 4 of the 6 were checkable from this capture | WRONG |
+| 1.4 | Will the self-built attributor hit ≥90% agreement on its first run? | **No** — 70–85%, needs one iteration | **1.6%** (1 of 63) | CORRECT — direction, per the locked scoring rule; the magnitude was far off |
 
 **Reasoning**
 
@@ -177,9 +177,9 @@ is a genuine replication, not a formality.
 
 | # | Belief | Predicted here | Falsified if | Actual | Verdict |
 |---|---|---|---|---|---|
-| P1 | Cost grows **super-linearly** with turns | Reproduces | cost/turn is flat or falling across a long session | | |
+| P1 | Cost grows **super-linearly** with turns | Reproduces | cost/turn is flat or falling across a long session | cost/turn ~flat (1.12x first→last quartile over 46 turns); cumulative 46% at midpoint vs 50% for linear | **FALSIFIED** |
 | P2 † | Reducing tool round-trips does **not** reduce cost | Reproduces | a ≥20% cut in call count yields a ≥10% cost drop | | |
-| P3 | Total prompt tokens overstates real cost ~3x at high hit rate | Reproduces; multiplier is provider-specific | the multiplier falls outside **2x–5x** at a hit rate ≥60% | | |
+| P3 | Total prompt tokens overstates real cost ~3x at high hit rate | Reproduces; multiplier is provider-specific | the multiplier falls outside **2x–5x** at a hit rate ≥60% | **6.75x** at 95.7% hit rate | **FALSIFIED** |
 
 If any of these fails to reproduce, that is a finding, not an error to hide.
 
@@ -229,3 +229,34 @@ existing entry, and never edit the text an entry corrects.
 Format: `**YYYY-MM-DD** — <what was wrong> → <correction>`
 
 _None yet._
+
+---
+
+## Results — capture of 2026-08-18 (75 records, 63 comparable turns, 46-turn main lineage)
+
+Filled per the lock rule: `actual` and `verdict` only. No `predicted` cell was touched.
+
+**P3 was the wrong shape, not the wrong number.** The multiplier is not a
+constant; it is a function of the hit rate, `1 / (1 - 0.9h)`:
+
+| hit rate | multiplier |
+|---|---|
+| 65.6% | 2.44x  (RepoCoach's measurement) |
+| 95.7% | 7.21x  (this capture) |
+
+RepoCoach measured ~3x at 65.6%. Writing that down as a constant made
+falsification inevitable the moment a session cached better.
+
+**P1 failed for a mechanism worth stating.** RepoCoach's super-linear growth came
+from resending the whole conversation at list price every call. At 95.7% cache
+hit that resend costs 0.1x, so the quadratic term is largely neutralised and the
+curve flattens to roughly linear. Caching does not just reduce the constant, it
+changes the shape.
+
+**1.2 was off by its whole range** — predicted 10–20% of turns diverging,
+measured zero in 63. One session is not a rate; what it does establish is that a
+well-behaved Claude Code session can run 46 turns with an unbroken prefix.
+
+**1.1 has no samples.** With zero divergences there is no distribution to report.
+Answering it needs captures containing compaction, MCP changes, or long idle
+gaps.

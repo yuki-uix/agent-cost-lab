@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest
 
+# "agreement 71.4%" (split) or "agreement rate: 71.4%" (tie) — the phrasing
+# differs by branch and these tests are about the number, not the wording.
+RATE = re.compile(r"agreement[^\n]*?\d+\.\d%")
+
 spec = importlib.util.spec_from_file_location(
     "calibrate_attributor",
     Path(__file__).resolve().parents[1] / "scripts" / "calibrate_attributor.py")
@@ -58,8 +62,10 @@ def test_single_class_ground_truth_reports_no_rate(tmp_path, monkeypatch, capsys
 
     assert "DEGENERATE GROUND TRUTH" in out
     # "no agreement rate reported" legitimately contains the word; what must be
-    # absent is a *number* attached to it.
-    assert not re.search(r"agreement\s+\d", out), \
+    # absent is a *percentage* attached to it. Matched loosely on purpose: the
+    # script prints the rate as "agreement N%" on a split and "agreement rate:
+    # N%" on a tie, and this assertion must not depend on which.
+    assert not re.search(RATE, out), \
         "a rate a constant would match must not be printed"
     assert "best order" not in out.lower(), "no order can be ranked on one class"
     assert "constant-`no_divergence` attributor scores" in out
@@ -83,7 +89,7 @@ def test_two_classes_still_get_a_rate(tmp_path, monkeypatch, capsys):
 
     out = run(monkeypatch, capsys, write(tmp_path, rows))
     assert "DEGENERATE GROUND TRUTH" not in out
-    assert re.search(r"agreement\s+\d", out), out
+    assert re.search(RATE, out), out
 
 
 def test_official_diagnostics_are_preferred_over_the_usage_fallback(

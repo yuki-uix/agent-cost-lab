@@ -88,6 +88,75 @@ def test_proxy_injected_diagnostics_field_is_ignored():
     assert attribute(prev, curr) is None
 
 
+# --- normalisation: equivalent transport encodings ---------------------------
+
+def test_content_string_equals_single_text_block():
+    """AC1: ``"content": "x"`` and ``"content": [{"type":"text","text":"x"}]``
+    tokenise identically, so the cache does not break — not a divergence."""
+    prev = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}
+    curr = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}]}
+    assert attribute(prev, curr) is None
+    assert attribute(curr, prev) is None  # symmetric
+
+
+def test_content_string_equals_single_text_block_with_cache_control():
+    """The block form may also carry a cache_control breakpoint marker; both
+    sides collapse to the same token-equivalent form."""
+    prev = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user",
+                          "content": [{"type": "text", "text": "hi",
+                                       "cache_control": {"type": "ephemeral"}}]}]}
+    curr = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}]}
+    assert attribute(prev, curr) is None
+
+
+def test_cache_control_marker_alone_is_not_a_divergence():
+    """A moving ``cache_control`` breakpoint does not change the token stream,
+    so its presence/absence alone is not a cache break."""
+    prev = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"},
+                         {"role": "assistant",
+                          "content": [{"type": "text", "text": "done",
+                                       "cache_control": {"type": "ephemeral"}}]}]}
+    curr = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"},
+                         {"role": "assistant",
+                          "content": [{"type": "text", "text": "done"}]},
+                         {"role": "user", "content": "next"}]}
+    assert attribute(prev, curr) is None
+
+
+def test_normalisation_never_merges_different_text():
+    """Text content that actually differs must still be a divergence even when
+    one side is a string and the other a block."""
+    prev = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "old"}]}]}
+    curr = {"model": "a", "max_tokens": 1,
+            "messages": [{"role": "user", "content": "new"}]}
+    result = attribute(prev, curr)
+    assert result is not None
+    assert result.component == "messages"
+
+
+def test_tool_schema_key_order_is_still_a_divergence():
+    """AC2: normalisation must not leak into ``tools`` — a key-order change in a
+    tool schema is byte-different and still a real cache break."""
+    prev = {"model": "a", "max_tokens": 1,
+            "tools": [{"name": "read", "input_schema": {"type": "object",
+                                                        "properties": {"a": {}, "b": {}}}}],
+            "messages": [{"role": "user", "content": "x"}]}
+    curr = {"model": "a", "max_tokens": 1,
+            "tools": [{"name": "read", "input_schema": {"type": "object",
+                                                        "properties": {"b": {}, "a": {}}}}],
+            "messages": [{"role": "user", "content": "x"}]}
+    result = attribute(prev, curr)
+    assert result is not None
+    assert result.component == "tools"
+
+
 # --- append vs truncation asymmetry -----------------------------------------
 
 def test_appending_messages_is_not_a_divergence():

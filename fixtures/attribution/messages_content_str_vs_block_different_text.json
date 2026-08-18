@@ -1,0 +1,30 @@
+{
+  "name": "messages_content_str_vs_block_different_text",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+      {"role": "user", "content": [{"type": "text", "text": "old question"}]}
+    ],
+    "tools": []
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+      {"role": "user", "content": "new question"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "component": "messages",
+    "path": ["messages", 2, "content"],
+    "detail_contains": ["message 2"]
+  }
+}

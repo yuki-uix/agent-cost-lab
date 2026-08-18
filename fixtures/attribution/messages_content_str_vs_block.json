@@ -1,0 +1,26 @@
+{
+  "name": "messages_content_str_vs_block",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+      {"role": "user", "content": [{"type": "text", "text": "<system-reminder>\nAvailable agent types: claude, Explore, Plan."}]}
+    ],
+    "tools": []
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+      {"role": "user", "content": "<system-reminder>\nAvailable agent types: claude, Explore, Plan."}
+    ],
+    "tools": []
+  },
+  "expected": null
+}

@@ -1,0 +1,34 @@
+{
+  "name": "messages_tool_result_reserialized",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "read", "input": {"path": "a.txt", "line": 5}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "hello\nworld", "is_error": false}]}
+    ],
+    "tools": [
+      {"name": "read", "description": "Read a file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "line": {"type": "integer"}}}}
+    ]
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "read the file"},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "read", "input": {"path": "a.txt", "line": 5}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "is_error": false, "content": "hello\nworld"}]}
+    ],
+    "tools": [
+      {"name": "read", "description": "Read a file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "line": {"type": "integer"}}}}
+    ]
+  },
+  "expected": {
+    "component": "messages",
+    "path": ["messages", 2, "content", 0, "content"],
+    "detail_contains": ["message 2", "field order changed"]
+  }
+}

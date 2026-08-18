@@ -1,0 +1,25 @@
+{
+  "name": "messages_appended",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": "hello"}
+    ],
+    "tools": []
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "hi"},
+      {"role": "assistant", "content": "hello"},
+      {"role": "user", "content": "what is 2+2?"}
+    ],
+    "tools": []
+  },
+  "expected": null
+}

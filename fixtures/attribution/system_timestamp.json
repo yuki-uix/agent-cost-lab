@@ -1,0 +1,26 @@
+{
+  "name": "system_timestamp",
+  "prev": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are an assistant. Current time: 2026-08-18T09:00:00Z",
+    "messages": [
+      {"role": "user", "content": "hi"}
+    ],
+    "tools": []
+  },
+  "curr": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "system": "You are an assistant. Current time: 2026-08-18T09:00:01Z",
+    "messages": [
+      {"role": "user", "content": "hi"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "component": "system",
+    "path": ["system"],
+    "detail_contains": ["text differs"]
+  }
+}

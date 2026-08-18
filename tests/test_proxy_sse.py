@@ -338,3 +338,21 @@ def test_malformed_messages_shapes_do_not_collide():
         {"model": "other", "messages": [{"role": "user", "content": "hi"}]},
     )}
     assert len(keys) == 3, "missing and empty messages are both 'no seed'; the rest differ"
+
+
+def test_absent_diagnostics_is_recorded_differently_from_a_null_one(servers):
+    """`msg.get("diagnostics")` returns None for both, and those mean opposite
+    things: the beta header never took effect, versus compared and cache hit.
+    The health gate's whole ability to tell a clean session from a dead
+    instrument rests on this distinction surviving into the ledger.
+    """
+    httpx.post(f"{PROXY}/v1/messages", timeout=10.0,
+               json={**BODY, "model": "no-diagnostics-key"})
+    absent = _records(servers)[-1]
+    assert absent["diagnostics"] is None
+    assert absent["diagnostics_present"] is False
+
+    httpx.post(f"{PROXY}/v1/messages", timeout=10.0, json=BODY)
+    present = _records(servers)[-1]
+    assert present["diagnostics_present"] is True, \
+        "upstream sent the key; the ledger must say so even when the value is null"

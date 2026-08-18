@@ -12,6 +12,27 @@ All star counts and SHAs were observed **2026-08-18** unless noted. "README is n
 evidence about code" — the AC2 verdicts below cite file + function from the
 tagged source tarballs, not documentation.
 
+## Which of this was re-derived by the reviewer
+
+This document was produced under a tool allowlist that denied 22 calls, including
+the `curl` loops and `git ls-remote` used to resolve SHAs and star counts. The
+author could not fully self-verify. Everything below that a second party re-ran
+independently is marked `✔re`; everything else rests on the author's run alone.
+Both are honest — they are not equally checked, and collapsing them would drop
+the whole table to the weaker of the two.
+
+| Claim | Re-derived by the reviewer? |
+|---|---|
+| AC1 — all four repos resolve, licences, star counts | `✔re` HTTP 200 ×4, licences exact, stars within 1 |
+| AC1 — all four SHAs | `✔re` each tag resolved via the API, annotated tags dereferenced, 4/4 match |
+| AC2 — lean-ctx is hybrid | `✔re` `history_prune.rs` at the pinned SHA: `cached_prefix_len()` L51, `prune_history_range()` L105; `cache_safety.rs` L4 carries the quoted sentence |
+| AC2 — RTK / DCP / Cozempic verdicts | not re-derived |
+| AC3 — the 1.6% text is absent from RTK's README | `✔re` README fetched at `b34be37c`, six patterns, zero hits |
+| AC4 — Headroom (the 37× outlier) | `✔re` 66,757 observed |
+| AC4 — the other six rows | not re-derived |
+| AC5 — TokenPilot baselines | **partial** — paper and title confirmed at arXiv 2606.17016; the abstract names no baselines and no community tool, consistent with the conclusion. The verbatim Appendix A.2 quote was **not** independently confirmed |
+| AC6 — no `ANTHROPIC_BASE_URL`; `baseURL` per provider | `✔re` `providers.mdx` at the pinned SHA: 0 occurrences; `baseURL` documented at L34/42 |
+
 ---
 
 ## AC1 — identity facts for the four tools

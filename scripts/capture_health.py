@@ -44,9 +44,22 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
         (ok if cond else bad).append(msg)
 
     gate(bool(served), f"{len(served)}/{len(rows)} requests reached upstream")
-    gate(len(with_usage) == len(served),
-         f"usage recorded on {len(with_usage)}/{len(served)} served requests"
-         + ("" if len(with_usage) == len(served) else "  <- gzip or parse failure"))
+    # A client that cancels mid-stream leaves no usage and nothing is wrong.
+    # Only a request whose body was read to the end and still has no usage
+    # indicates the ledger losing data. Captures predating stream_complete fall
+    # back to tolerating a small fraction.
+    lost = [r for r in served if not r.get("usage") and r.get("stream_complete", False)]
+    aborted = [r for r in served if not r.get("usage") and not r.get("stream_complete", False)]
+    legacy = all("stream_complete" not in r for r in served)
+    if legacy:
+        gate(len(aborted) <= max(1, len(served) // 20),
+             f"usage recorded on {len(with_usage)}/{len(served)} served requests"
+             " (pre-stream_complete capture, judged by fraction)")
+    else:
+        gate(not lost,
+             f"usage recorded on {len(with_usage)}/{len(served)} served requests"
+             f", {len(aborted)} client-aborted"
+             + ("" if not lost else f", {len(lost)} lost after a complete stream  <- ledger failure"))
     # Instrument failure invalidates the data; a transient transport blip on one
     # request does not — that record is marked and can simply be excluded.
     instrument = [r for r in errs if "parse failed" in (r.get("error") or "")

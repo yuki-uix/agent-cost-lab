@@ -123,3 +123,24 @@ def test_a_few_inconclusive_verdicts_are_tolerated():
     rows[4]["diagnostics"] = {"cache_miss_reason": {"type": "unavailable"}}
     _, bad, _ = health.check(rows)
     assert not any("inconclusive" in b for b in bad), bad
+
+
+def test_client_aborted_request_is_not_counted_as_lost_usage():
+    """Cancelling mid-stream leaves no usage and nothing is wrong. Only a fully
+    read body with no usage means the ledger dropped something."""
+    rows = healthy()
+    rows[4]["usage"] = None
+    rows[4]["stream_complete"] = False
+    for r in rows:
+        r.setdefault("stream_complete", True)
+    _, bad, _ = health.check(rows)
+    assert not any("usage recorded" in b for b in bad), bad
+
+
+def test_usage_lost_after_a_complete_stream_fails():
+    rows = healthy()
+    for r in rows:
+        r["stream_complete"] = True
+    rows[4]["usage"] = None
+    _, bad, _ = health.check(rows)
+    assert any("lost after a complete stream" in b for b in bad)

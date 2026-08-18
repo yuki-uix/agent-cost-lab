@@ -68,9 +68,28 @@ must instrument it. See `docs/delegation/06-e2-rig-NOTES.md` §2.
   (`[二手·未核]`, quoted for identification only, not reproduced at length).
 
 **Conclusion (stated plainly, no softening):** the "advertised 80%" half of the claim is
-real (RTK advertises 80% session-total). The "RTK's own README concedes 1.6%" half is
-**false** — that number is the survey's, and predictions.md's 2.1 reasoning misattributes
-it. This is errata-worthy. predictions.md is not edited here (it is append-only).
+real (RTK advertises 80% session-total in `docs/usage/FEATURES.md`). The "RTK's own README
+concedes 1.6%" half is **false** — that number is the survey's, and predictions.md's 2.1
+reasoning misattributes it. This is errata-worthy. predictions.md is not edited here (it is
+append-only).
+
+### Added in review: RTK's README draws the distinction itself
+
+Verified independently at the same SHA `[一手]`. The README's headline figure is **90% of
+bash output**, not 80% savings, and its second paragraph (line 60) states:
+
+> "RTK cuts **up to 90% of the bash output** your agent reads. That is what RTK measures,
+> and it is not the same as cutting your bill by 90%."
+
+This matters more than the misattribution. E2's framing in predictions.md is that "the two
+kinds have opposite cost profiles and **the ecosystem reports them with the same metric**".
+For RTK that is false: it names its own metric, and explicitly refuses the inference to the
+bill — the distinction this repo was built to make, made by the tool under test, in its
+second paragraph.
+
+So the target may not be "the tools overclaim". On this evidence it is closer to "the tool
+was precise and the survey summarising it was not". Which of those E2 is testing changes
+what the experiment is for, and it should be settled before any paid run.
 
 ---
 

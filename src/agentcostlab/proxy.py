@@ -136,6 +136,10 @@ async def messages(request: Request):
         "first_byte_ms": None,
         "status_code": None,
         "error": None,
+        # False until the response body is fully read. A client that cancels
+        # mid-stream leaves a record with no usage and nothing wrong — without
+        # this flag that is indistinguishable from a parse failure.
+        "stream_complete": False,
     }
 
     client: httpx.AsyncClient = request.app.state.client
@@ -187,6 +191,7 @@ async def messages(request: Request):
                             buf = b""
             if not parsed and buf and enc == "identity":
                 _observe(_parse_json_body, buf, record)
+            record["stream_complete"] = True
         finally:
             await resp.aclose()
             # Written even when the client aborts mid-stream, so partial

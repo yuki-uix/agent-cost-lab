@@ -37,6 +37,7 @@ POLICIES: dict[str, Policy] = {
     "injected_previous_message_id": Policy.KEEP,
     "response_id": Policy.KEEP,
     "status_code": Policy.KEEP,
+    "stream_complete": Policy.KEEP,
     "error": Policy.KEEP,
     # Shape is the whole point of the prefix-diff work; content is not ours to publish.
     "request_body": Policy.HASH,

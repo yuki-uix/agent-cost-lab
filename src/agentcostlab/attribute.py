@@ -21,6 +21,8 @@ measured, not assumed, by ``scripts/calibrate_attributor.py``.
 from __future__ import annotations
 
 import json
+
+from .codec import serialise
 from dataclasses import dataclass
 
 # The components that participate in the cache prefix. "params" is the catch-all
@@ -62,10 +64,16 @@ class Divergence:
 
 
 def _dump(value: object) -> bytes:
-    """Byte-faithful serialisation. Must stay in sync with ``proxy.serialise``."""
+    """Byte-faithful serialisation, delegating to the shared encoder.
+
+    This used to re-implement the proxy's settings with a "must stay in sync"
+    comment. A comment is not a constraint: changing the proxy's encoder would
+    have left this one behind, and every byte offset reported here would then
+    describe a stream that was never sent.
+    """
     if value is _MISSING:
         return b""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+    return serialise(value)
 
 
 def _segments(body: dict) -> dict[str, object]:

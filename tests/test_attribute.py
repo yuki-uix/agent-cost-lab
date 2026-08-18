@@ -199,3 +199,13 @@ def test_diverging_components_lists_every_break():
 
 def test_all_components_in_order_are_known():
     assert set(COMPONENTS) == {"model", "system", "tools", "messages", "params"}
+
+
+def test_attributor_and_proxy_share_one_encoder():
+    """Not 'they currently agree' — the same object, so they cannot diverge."""
+    from agentcostlab import attribute, codec, proxy
+
+    assert proxy.serialise is codec.serialise
+    assert attribute.serialise is codec.serialise
+    # and the sentinel path stays local to the attributor
+    assert attribute._dump(attribute._MISSING) == b""

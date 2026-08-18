@@ -23,6 +23,23 @@ def load(path: Path) -> list[dict]:
     return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
 
+def _broke_cache(record: dict, by_response_id: dict) -> bool:
+    """Did this turn demonstrably lose the cache, judged only by the ledger?
+
+    Independent of `diagnostics`, so it can be used as a witness against it.
+    Requires the predecessor to be in this capture and to have read cached
+    tokens: without that there is nothing to have lost. An empty or absent
+    usage is "not recorded", not "read zero" — record 46 of the 2026-08-18
+    capture has `usage: {}` and is not a cache break.
+    """
+    prev = by_response_id.get(record.get("injected_previous_message_id"))
+    usage, prev_usage = record.get("usage"), (prev or {}).get("usage")
+    if not usage or not prev_usage:
+        return False
+    return (usage.get("cache_read_input_tokens", 0) == 0
+            and prev_usage.get("cache_read_input_tokens", 0) > 0)
+
+
 def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     ok, bad = [], []
     undecidable = None
@@ -30,6 +47,7 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     errs = [r for r in rows if r.get("error")]
     with_usage = [r for r in served if r.get("usage")]
     threaded = [r for r in rows if r.get("injected_previous_message_id")]
+    by_response_id = {r["response_id"]: r for r in rows if r.get("response_id")}
     verdicts = [r["diagnostics"]["cache_miss_reason"]["type"]
                 for r in rows
                 if isinstance(r.get("diagnostics"), dict)
@@ -120,21 +138,32 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     unrecorded = [r for r in answerable if r.get("diagnostics_present") is None]
     replied = [r for r in recorded if r["diagnostics_present"]]
 
-    # 0.9, and this number IS chosen here — unlike the 30% below, which
-    # predictions.md locked before any experiment ran. Set high on purpose: the
-    # beta is not probabilistic. Either the header is honoured for a request or
-    # it is not, so a healthy session carries the key on every answerable turn.
-    # The margin is for a stray record the parser could not read, not for a
-    # header that stopped working halfway through — which is the failure mode
-    # E1's 50-turn sessions exist to stress, and which `bool(replied)` passed.
-    BETA_MIN = 0.9
-    if recorded:
-        healthy = len(replied) >= BETA_MIN * len(recorded)
-        gate(healthy,
-             f"upstream returned a diagnostics key on {len(replied)}/{len(recorded)}"
-             f" answerable turns"
-             + ("" if healthy else
-                f"  <- under {BETA_MIN:.0%}; the beta header stopped taking effect"))
+    # Whether the beta is alive is decided by evidence, never by a rate.
+    #
+    # #26 asked for a fraction threshold to replace `bool(replied)`, and that
+    # remedy does not hold up: it assumes a healthy session carries the key on
+    # nearly every answerable turn, and NO capture has ever carried
+    # `diagnostics_present` at all, so nothing establishes that. If the API
+    # returns the key only when it has something to say, then replied/answerable
+    # IS the miss rate — low is healthy — and any floor on it condemns good
+    # data. Captures cost the operator a working session; three have already
+    # been discarded, and a false FAIL here inverts this file's whole purpose.
+    #
+    # The usage ledger can witness it without knowing the semantics. A turn that
+    # demonstrably lost the cache should have had something to report:
+    witnesses = [r for r in recorded
+                 if not r["diagnostics_present"] and _broke_cache(r, by_response_id)]
+    if replied:
+        gate(True, f"beta header alive: a diagnostics key came back on"
+                   f" {len(replied)}/{len(recorded)} answerable turns")
+    elif witnesses:
+        gate(False, f"{len(witnesses)} turns lost the cache and still carried no"
+                    " diagnostics key  <- beta header never took effect")
+    elif recorded:
+        undecidable = ("beta effectiveness UNDECIDABLE: no answerable turn"
+                       " carried a diagnostics key, and none of them lost the"
+                       " cache either — a silent beta and a clean session look"
+                       " identical from here")
     # Reported whenever ANY answerable turn predates the field, not only when
     # they all do. Judging 1 turn and staying silent about the other 10 reads as
     # full coverage of a capture that is 90% unjudgeable.

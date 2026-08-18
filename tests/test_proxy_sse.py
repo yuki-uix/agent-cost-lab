@@ -66,6 +66,17 @@ def _stream(stop_after=None):
     return asyncio.run(run())
 
 
+def _post(body, headers=None):
+    async def run():
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            async with c.stream("POST", f"{PROXY}/v1/messages", json=body,
+                                headers=headers or {}) as r:
+                async for _ in r.aiter_lines():
+                    pass
+
+    return asyncio.run(run())
+
+
 def _records(capture: Path) -> list[dict]:
     return [json.loads(l) for l in capture.read_text().splitlines()]
 
@@ -95,6 +106,44 @@ def test_previous_message_id_threads_across_turns(servers):
     assert seen["last_body"]["diagnostics"]["previous_message_id"] == "msg_fake_01"
     rec = _records(servers)[-1]
     assert rec["diagnostics"]["cache_miss_reason"]["type"] == "system_changed"
+
+
+def test_fresh_lineage_gets_null_previous_message_id(servers):
+    """A lineage with no prior successful response must not inherit the id of
+    some other conversation's last message."""
+    body = {**BODY, "messages": [{"role": "user", "content": "fresh-lineage-null"}]}
+    _post(body)
+    seen = httpx.get(f"{UPSTREAM}/_last", timeout=5).json()
+    assert seen["last_body"]["diagnostics"]["previous_message_id"] is None
+
+
+def test_interleaved_lineages_do_not_cross_thread(servers):
+    """Two conversations sharing one proxy must stay separate: a turn in lineage
+    B must never be threaded to lineage A's previous message, and vice versa."""
+    a = {**BODY, "messages": [{"role": "user", "content": "task-a"}]}
+    b = {**BODY, "messages": [{"role": "user", "content": "task-b"}]}
+
+    _post(a)  # A's first turn records its response id
+    _post(b)  # B is a different lineage — must be null, not A's id
+    seen = httpx.get(f"{UPSTREAM}/_last", timeout=5).json()
+    assert seen["last_body"]["diagnostics"]["previous_message_id"] is None
+
+    _post(a)  # back to A: still its own id, not reset by B's interleave
+    seen = httpx.get(f"{UPSTREAM}/_last", timeout=5).json()
+    assert seen["last_body"]["diagnostics"]["previous_message_id"] == "msg_fake_01"
+
+
+def test_lineage_key_is_model_and_first_message_only():
+    """The trap: hashing system/tools would split a lineage exactly when the
+    system prompt changes mid-conversation. The key must ignore both."""
+    from agentcostlab.proxy import _lineage_key
+
+    base = {"model": "claude-sonnet-5",
+            "messages": [{"role": "user", "content": "seed"}]}
+    k = _lineage_key(base)
+    assert _lineage_key({**base, "system": "changed", "tools": [{"name": "x"}]}) == k
+    assert _lineage_key({**base, "messages": [{"role": "user", "content": "other"}]}) != k
+    assert _lineage_key({**base, "model": "claude-opus-5"}) != k
 
 
 def test_client_disconnect_propagates_and_still_records(servers):
@@ -257,3 +306,35 @@ def test_a_broken_parser_cannot_damage_the_stream():
     rec: dict = {}
     assert _observe(exploding, b"x", rec) is None
     assert "boom" in rec["error"]
+
+
+@pytest.mark.parametrize("body,label", [
+    ({"model": "m"}, "messages missing"),
+    ({"model": "m", "messages": []}, "messages empty"),
+    ({"model": "m", "messages": "nope"}, "messages is a string"),
+    ({"model": "m", "messages": {"a": 1}}, "messages is a dict"),
+    ({}, "empty body"),
+    ({"model": "m", "messages": [{"x": {1, 2}}]}, "first message not serialisable"),
+])
+def test_lineage_key_never_raises_on_malformed_bodies(body, label):
+    """_lineage_key runs on the request path, outside the _observe guard.
+
+    A body is only known to be valid JSON, not valid for the API. Raising here
+    turns upstream's 400 into a proxy 500 and hides the real error.
+    """
+    from agentcostlab.proxy import _lineage_key
+
+    assert isinstance(_lineage_key(body), str)
+
+
+def test_malformed_messages_shapes_do_not_collide():
+    """Silent collisions are worse than crashes: distinct shapes, distinct keys."""
+    from agentcostlab.proxy import _lineage_key
+
+    keys = {_lineage_key(b) for b in (
+        {"model": "m"},
+        {"model": "m", "messages": []},
+        {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        {"model": "other", "messages": [{"role": "user", "content": "hi"}]},
+    )}
+    assert len(keys) == 3, "missing and empty messages are both 'no seed'; the rest differ"

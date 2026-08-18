@@ -12,6 +12,7 @@ on client disconnect) is covered by tests/test_proxy_sse.py.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import time
@@ -30,7 +31,36 @@ BETA = "cache-diagnosis-2026-04-07"
 # caller's own auth) is forwarded untouched.
 STRIP = {"host", "content-length", "accept-encoding", "connection"}
 
-LAST_ID: dict[str, str | None] = {"id": None}
+# One slot per conversation lineage, keyed by the fields that stay fixed for a
+# conversation's whole life: the model and the first message.
+LAST_ID: dict[str, str | None] = {}
+
+
+def _lineage_key(body: dict) -> str:
+    """Stable identity for the conversation lineage a request belongs to.
+
+    A conversation's seed is (model, messages[0]): the model is fixed and the
+    first message is the turn every later turn grows out of. The system prompt
+    and the tool list both change mid-conversation — that is exactly the cache
+    killer E1 sets out to measure — so hashing either of them in would turn every
+    such change into a brand-new lineage, whose next request sends
+    previous_message_id: null and gets no diagnostics. The instrument would
+    erase the thing it exists to record.
+
+    sha256 over a canonical JSON encoding, not hash(): hash() is salted by
+    PYTHONHASHSEED (unstable across processes) and cannot hash a dict.
+
+    Defensive about shape: this runs on the request path, before any response
+    exists, so it is not covered by the _observe guard. A body is only known to
+    be valid JSON, not valid for the API — `{"messages": {...}}` parses fine and
+    used to raise KeyError here, turning upstream's 400 into a proxy 500 and
+    hiding the real error from the caller.
+    """
+    messages = body.get("messages")
+    first = messages[0] if isinstance(messages, list) and messages else None
+    raw = json.dumps([body.get("model"), first],
+                     ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 @contextlib.asynccontextmanager
@@ -56,13 +86,13 @@ def serialise(body: dict) -> bytes:
     return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
 
 
-def _inject_diagnostics(body: dict, headers: dict) -> None:
+def _inject_diagnostics(body: dict, headers: dict, key: str) -> None:
     """Opt in to Anthropic cache diagnostics on EVERY turn.
 
     Turning this on mid-conversation would itself change the beta-header set and
     cost one self-inflicted miss, so it is all-or-nothing per session.
     """
-    body["diagnostics"] = {"previous_message_id": LAST_ID["id"]}
+    body["diagnostics"] = {"previous_message_id": LAST_ID.get(key)}
     betas = [b for b in headers.get("anthropic-beta", "").split(",") if b.strip()]
     if BETA not in betas:
         betas.append(BETA)
@@ -87,8 +117,9 @@ async def messages(request: Request):
     body = json.loads(raw)
     headers = {k: v for k, v in request.headers.items() if k.lower() not in STRIP}
 
+    key = _lineage_key(body)
     if PROVIDER == "anthropic":
-        _inject_diagnostics(body, headers)
+        _inject_diagnostics(body, headers, key)
 
     # Ask upstream not to compress. aiter_raw() yields undecoded bytes, so a
     # gzipped stream passes through fine but is unparseable here — the ledger
@@ -104,7 +135,7 @@ async def messages(request: Request):
         "model": body.get("model"),
         "client_bytes": len(raw),
         "request_bytes": len(payload),
-        "injected_previous_message_id": LAST_ID["id"],
+        "injected_previous_message_id": LAST_ID.get(key),
         "request_body": body,
         "system_prompt": body.get("system"),
         "tool_names": [t.get("name") for t in body.get("tools", [])],
@@ -233,7 +264,7 @@ def _parse_start(buf: bytes, record: dict) -> bool:
             record["usage"] = msg.get("usage")
             record["diagnostics"] = msg.get("diagnostics")
             record["response_id"] = msg.get("id")
-            LAST_ID["id"] = msg.get("id")
+            LAST_ID[_lineage_key(record.get("request_body", {}))] = msg.get("id")
             return True
     return False
 
@@ -257,7 +288,7 @@ def _parse_json_body(buf: bytes, record: dict) -> None:
     record["diagnostics"] = msg.get("diagnostics")
     record["response_id"] = msg.get("id")
     if msg.get("id"):
-        LAST_ID["id"] = msg["id"]
+        LAST_ID[_lineage_key(record.get("request_body", {}))] = msg["id"]
 
 
 if __name__ == "__main__":

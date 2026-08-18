@@ -23,13 +23,34 @@ def load(path: Path) -> list[dict]:
     return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
 
+def _broke_cache(record: dict, by_response_id: dict) -> bool:
+    """Did this turn demonstrably lose the cache, judged only by the ledger?
+
+    Independent of `diagnostics`, so it can be used as a witness against it.
+    Requires the predecessor to be in this capture and to have read cached
+    tokens: without that there is nothing to have lost. An empty or absent
+    usage is "not recorded", not "read zero" — record 46 of the 2026-08-18
+    capture has `usage: {}` and is not a cache break.
+    """
+    prev = by_response_id.get(record.get("injected_previous_message_id"))
+    usage, prev_usage = record.get("usage"), (prev or {}).get("usage")
+    if not usage or not prev_usage:
+        return False
+    return (usage.get("cache_read_input_tokens", 0) == 0
+            and prev_usage.get("cache_read_input_tokens", 0) > 0)
+
+
 def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     ok, bad = [], []
-    undecidable = None
+    # A list, not a slot: the two conditions below are independent and can
+    # both hold on one capture. Assigning would let the second silently
+    # discard the first — the same overwrite the `error` field still has.
+    undecidable: list[str] = []
     served = [r for r in rows if r.get("status_code") == 200]
     errs = [r for r in rows if r.get("error")]
     with_usage = [r for r in served if r.get("usage")]
     threaded = [r for r in rows if r.get("injected_previous_message_id")]
+    by_response_id = {r["response_id"]: r for r in rows if r.get("response_id")}
     verdicts = [r["diagnostics"]["cache_miss_reason"]["type"]
                 for r in rows
                 if isinstance(r.get("diagnostics"), dict)
@@ -110,17 +131,50 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     # proxy.py now records `diagnostics_present` separately. Captures made
     # before that carry None and cannot be judged either way; say so rather
     # than passing them.
-    recorded = [r for r in threaded if r.get("diagnostics_present") is not None]
+    # Judged only over turns where a reply was possible at all: served, and
+    # parsed far enough to have usage. A 429 or an aborted stream never reached
+    # the parser, so its `diagnostics_present` is None for a reason that has
+    # nothing to do with the beta header.
+    answerable = [r for r in threaded
+                  if r.get("status_code") == 200 and r.get("usage")]
+    recorded = [r for r in answerable if r.get("diagnostics_present") is not None]
+    unrecorded = [r for r in answerable if r.get("diagnostics_present") is None]
     replied = [r for r in recorded if r["diagnostics_present"]]
-    if recorded:
-        gate(bool(replied),
-             f"upstream returned a diagnostics key on {len(replied)}/{len(recorded)}"
-             " threaded turns"
-             + ("" if replied else "  <- beta header never took effect"))
-    elif threaded:
-        undecidable = ("beta effectiveness UNDECIDABLE: this capture predates"
-                       " diagnostics_present, and a null diagnostics is"
-                       " indistinguishable from an absent one")
+
+    # Whether the beta is alive is decided by evidence, never by a rate.
+    #
+    # #26 asked for a fraction threshold to replace `bool(replied)`, and that
+    # remedy does not hold up: it assumes a healthy session carries the key on
+    # nearly every answerable turn, and NO capture has ever carried
+    # `diagnostics_present` at all, so nothing establishes that. If the API
+    # returns the key only when it has something to say, then replied/answerable
+    # IS the miss rate — low is healthy — and any floor on it condemns good
+    # data. Captures cost the operator a working session; three have already
+    # been discarded, and a false FAIL here inverts this file's whole purpose.
+    #
+    # The usage ledger can witness it without knowing the semantics. A turn that
+    # demonstrably lost the cache should have had something to report:
+    witnesses = [r for r in recorded
+                 if not r["diagnostics_present"] and _broke_cache(r, by_response_id)]
+    if replied:
+        gate(True, f"beta header alive: a diagnostics key came back on"
+                   f" {len(replied)}/{len(recorded)} answerable turns")
+    elif witnesses:
+        gate(False, f"{len(witnesses)} turns lost the cache and still carried no"
+                    " diagnostics key  <- beta header never took effect")
+    elif recorded:
+        undecidable.append("beta effectiveness UNDECIDABLE: no answerable turn"
+                       " carried a diagnostics key, and none of them lost the"
+                           " cache either — a silent beta and a clean session"
+                           " look identical from here")
+    # Reported whenever ANY answerable turn predates the field, not only when
+    # they all do. Judging 1 turn and staying silent about the other 10 reads as
+    # full coverage of a capture that is 90% unjudgeable.
+    if unrecorded:
+        undecidable.append(f"beta effectiveness UNDECIDABLE on {len(unrecorded)}"
+                           f"/{len(answerable)} answerable turns: they predate"
+                           " diagnostics_present, and a null diagnostics is"
+                           " indistinguishable from an absent one")
 
     # "Key returned" is not "verdict obtained", and a verdict is not a miss.
     # A session with zero misses is legitimate data — 1.2 asks what share of
@@ -134,24 +188,35 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     # Recomputing it over some other population after seeing the data is the
     # exact move that file exists to prevent.
     INCONCLUSIVE = ("previous_message_not_found", "unavailable")
+    NO_REASON = "no reason returned"
 
-    def _inconclusive(r: dict) -> bool:
-        """The comparison was attempted and did not yield a reason."""
+    def _inconclusive_kind(r: dict) -> str | None:
+        """Which inconclusive condition this turn is in, or None.
+
+        Returns the label rather than a bool so the printed message is built
+        from the same source as the predicate. When these were two independent
+        pieces of text the message named two of the three counted conditions,
+        and a reader tallying by hand could not reproduce the number.
+        """
         d = r.get("diagnostics")
         if not isinstance(d, dict):
-            return False        # null diagnostics is a clean hit, not a failure
+            return None         # null diagnostics is a clean hit, not a failure
         reason = d.get("cache_miss_reason")
-        return reason is None or (reason or {}).get("type") in INCONCLUSIVE
+        if reason is None:
+            return NO_REASON
+        kind = (reason or {}).get("type")
+        return kind if kind in INCONCLUSIVE else None
+
+    KINDS = " / ".join((*INCONCLUSIVE, NO_REASON))
 
     # Counted over `threaded`, not over `rows`. Iterating all rows against a
     # threaded denominator let the ratio exceed 1 (a first turn carrying an
     # inconclusive verdict entered the numerator but not the denominator) —
     # the same mixed-population error this file was just rewritten to remove.
-    inconclusive = [r for r in threaded if _inconclusive(r)]
+    inconclusive = [r for r in threaded if _inconclusive_kind(r)]
     over = bool(threaded) and len(inconclusive) > 0.30 * len(threaded)
     gate(not over,
-         f"{len(inconclusive)}/{len(threaded)} threaded turns came back"
-         " unavailable / previous_message_not_found / no reason"
+         f"{len(inconclusive)}/{len(threaded)} threaded turns came back {KINDS}"
          + ("  <- over the 30% kill criterion in predictions.md" if over else ""))
 
     gate(len(main) >= 10,
@@ -198,8 +263,8 @@ def main() -> int:
         print(f"  PASS  {line}")
     for line in bad:
         print(f"  FAIL  {line}")
-    if stats["undecidable"]:
-        print(f"  ----  {stats['undecidable']}")
+    for line in stats["undecidable"]:
+        print(f"  ----  {line}")
     print(f"\n  lineages={stats['lineages']}  main_lineage_turns={stats['main_turns']}")
     # Printed unconditionally. When this was inside `if stats["verdicts"]`, the
     # one number that mattered — zero — was the one number that never appeared.
@@ -208,8 +273,10 @@ def main() -> int:
           + (f"  {dict(stats['verdicts'])}" if stats["verdicts"] else ""))
     if not stats["n_verdicts"] and stats["threaded"]:
         print("      zero verdicts is consistent with a clean session AND with a"
-              " dead beta header;")
-        print("      diagnostics_present (proxy.py) is what tells them apart.")
+              " dead beta header.")
+        print("      A turn that lost the cache and still carried no diagnostics"
+              " key would settle it;")
+        print("      this capture has none, so it stays open.")
 
     print("\n  supports:")
     for label, yes, why in stats["supports"]:

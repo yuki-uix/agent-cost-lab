@@ -87,21 +87,26 @@ def test_a_session_with_zero_divergences_is_usable():
     assert not bad, bad
 
 
-def test_upstream_never_returning_a_diagnostics_key_fails():
-    """Upstream omitting the key means the beta header never took effect.
+def test_upstream_never_returning_a_diagnostics_key_is_not_by_itself_a_defect():
+    """This test used to assert the opposite, and #25's version of the gate
+    agreed with it: no key anywhere meant the beta header was dead.
 
-    The old version of this test popped `diagnostics` off the record and
-    asserted the gate caught it — but proxy.py initialises that key when it
-    builds the record, so no real capture can ever be missing it. The test
-    exercised a shape the instrument cannot produce, and the gate it guarded
-    could not fail on real data.
+    That judgement was withdrawn on evidence. No capture has ever recorded
+    `diagnostics_present`, so nothing establishes that a healthy session carries
+    the key at all — if the API returns it only when it has something to say, a
+    clean session legitimately carries none. Condemning that would throw away a
+    capture the operator spent a working session producing.
+
+    What replaced it is a witness: see
+    test_a_turn_that_lost_the_cache_without_a_key_condemns_the_beta.
     """
     rows = healthy()
     for r in rows:
         r["diagnostics"] = None
         r["diagnostics_present"] = False
-    _, bad, _ = health.check(rows)
-    assert any("diagnostics key" in b for b in bad), bad
+    _, bad, stats = health.check(rows)
+    assert not bad, bad
+    assert stats["undecidable"], "silence must be reported as undecidable, not passed over"
 
 
 def test_a_null_diagnostics_with_the_key_present_is_a_clean_hit():
@@ -162,7 +167,11 @@ def test_all_inconclusive_verdicts_fail(reason):
     for r in rows:
         r["diagnostics"] = {"cache_miss_reason": {"type": reason} if reason else None}
     _, bad, _ = health.check(rows)
-    assert any("unavailable / previous_message_not_found" in b for b in bad)
+    # Matched on the stable part of the line, not on the order the kinds are
+    # listed in — that order comes from a constant and is not the behaviour
+    # under test. test_every_counted_condition_is_named_in_the_message covers
+    # the wording.
+    assert any("threaded turns came back" in b for b in bad), bad
 
 
 def test_a_few_inconclusive_verdicts_are_tolerated():
@@ -230,3 +239,109 @@ def test_the_inconclusive_ratio_cannot_exceed_one():
     num, denom = line.split(" ")[0].split("/")
     assert int(num) <= int(denom), line
     assert int(denom) == sum(1 for r in rows if r["injected_previous_message_id"])
+
+
+def _answered(rows, present=True):
+    for r in rows:
+        r["diagnostics"] = None
+        r["diagnostics_present"] = present
+    return rows
+
+
+def test_a_clean_session_with_no_key_is_undecidable_not_condemned():
+    """The remedy #26 asked for — a fraction floor on replied/answerable —
+    would fail this capture. Nothing establishes that a healthy session carries
+    the key at all: no capture has ever recorded diagnostics_present. If the API
+    returns it only when it has something to say, a clean session legitimately
+    scores zero, and a floor would throw away good data that cost the operator
+    a working session."""
+    rows = _answered(healthy(n=20), present=False)
+    ok, bad, stats = health.check(rows)
+    assert not bad, "a clean session must not be condemned on an unknown semantics"
+    assert stats["undecidable"], stats
+    assert any("identical from here" in u for u in stats["undecidable"])
+
+
+def test_a_turn_that_lost_the_cache_without_a_key_condemns_the_beta():
+    """The ledger witnesses it without knowing the semantics: a turn that
+    demonstrably lost the cache had something to report, so silence there is
+    the header being dead — not a clean session."""
+    rows = _answered(healthy(), present=False)
+    for r in rows:
+        r["usage"] = {"input_tokens": 5, "cache_read_input_tokens": 9000}
+    rows[6]["usage"] = {"input_tokens": 5, "cache_read_input_tokens": 0}
+    _, bad, _ = health.check(rows)
+    assert any("never took effect" in b for b in bad), bad
+
+
+def test_one_reply_proves_the_beta_is_alive():
+    """Evidence beats proportion: the key coming back at all is proof the
+    header was honoured, whatever fraction of turns had something to say."""
+    rows = _answered(healthy(n=20), present=False)
+    rows[4]["diagnostics_present"] = True
+    ok, bad, _ = health.check(rows)
+    assert not bad, bad
+    assert any("beta header alive" in line for line in ok), ok
+
+
+def test_an_empty_usage_is_not_a_cache_break():
+    """Record 46 of the 2026-08-18 capture carries `usage: {}`. Reading that as
+    cache_read == 0 invents a witness that is really a missing measurement."""
+    rows = _answered(healthy(), present=False)
+    for r in rows:
+        r["usage"] = {"input_tokens": 5, "cache_read_input_tokens": 9000}
+    rows[6]["usage"] = {}
+    _, bad, _ = health.check(rows)
+    assert not any("never took effect" in b for b in bad), bad
+
+
+def test_turns_that_could_not_answer_are_not_judged():
+    """A 429 never reached the parser. Counting it as 'the beta did not reply'
+    would blame the header for a transport failure."""
+    rows = _answered(healthy())
+    rows[5].update(status_code=429, usage=None, diagnostics_present=None)
+    ok, bad, _ = health.check(rows)
+    line = next(l for l in ok if "diagnostics key" in l)
+    assert "/10 answerable" in line, line   # 11 threaded, one of them a 429
+
+
+def test_partial_vintage_capture_is_reported_not_silently_narrowed():
+    """Judging 1 turn and staying silent about the other 10 reads as full
+    coverage of a capture that is 90% unjudgeable."""
+    rows = _answered(healthy())
+    for r in rows[2:]:
+        r.pop("diagnostics_present", None)
+    _, _, stats = health.check(rows)
+    assert stats["undecidable"], "a mixed-vintage capture must say so"
+    assert any("/11 answerable" in u for u in stats["undecidable"]), stats["undecidable"]
+
+
+@pytest.mark.parametrize("diagnostics,kind", [
+    ({"cache_miss_reason": {"type": "unavailable"}}, "unavailable"),
+    ({"cache_miss_reason": {"type": "previous_message_not_found"}},
+     "previous_message_not_found"),
+    ({"cache_miss_reason": None}, "no reason returned"),
+])
+def test_every_counted_condition_is_named_in_the_message(diagnostics, kind):
+    """The label is built from the predicate's own constants, so a fourth
+    condition cannot be counted without appearing in the text."""
+    rows = _answered(healthy())
+    for r in rows:
+        r["diagnostics"] = diagnostics
+    _, bad, _ = health.check(rows)
+    line = next(b for b in bad if "threaded turns came back" in b)
+    assert kind in line, f"{kind!r} is counted but not named in: {line}"
+    assert line.startswith("11/11"), line
+
+
+def test_both_undecidable_conditions_survive_together():
+    """They are independent: some turns predate the field, and the ones that
+    do carry it never got a key. Assigning to a single slot let the second
+    discard the first."""
+    rows = _answered(healthy(n=20), present=False)
+    for r in rows[10:]:
+        r.pop("diagnostics_present", None)
+    _, _, stats = health.check(rows)
+    assert len(stats["undecidable"]) == 2, stats["undecidable"]
+    assert any("identical from here" in u for u in stats["undecidable"])
+    assert any("predate" in u for u in stats["undecidable"])

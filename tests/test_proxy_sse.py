@@ -133,17 +133,56 @@ def test_interleaved_lineages_do_not_cross_thread(servers):
     assert seen["last_body"]["diagnostics"]["previous_message_id"] == "msg_fake_01"
 
 
-def test_lineage_key_is_model_and_first_message_only():
-    """The trap: hashing system/tools would split a lineage exactly when the
-    system prompt changes mid-conversation. The key must ignore both."""
+def test_lineage_key_is_the_first_message_only():
+    """Anything that changes during the events E1 measures must stay out of the
+    identity of what is being measured.
+
+    system and tools were kept out from the start for that reason. `model` was
+    not, on the reasoning that it is fixed for a conversation's life — and a
+    mid-conversation model switch is one of the three actions the capture plan
+    asks for, the only one that can produce `model_changed`.
+    """
     from agentcostlab.proxy import _lineage_key
 
     base = {"model": "claude-sonnet-5",
             "messages": [{"role": "user", "content": "seed"}]}
     k = _lineage_key(base)
     assert _lineage_key({**base, "system": "changed", "tools": [{"name": "x"}]}) == k
+    assert _lineage_key({**base, "model": "claude-opus-5"}) == k, \
+        "a model switch must stay in its lineage, or model_changed is unobservable"
     assert _lineage_key({**base, "messages": [{"role": "user", "content": "other"}]}) != k
-    assert _lineage_key({**base, "model": "claude-opus-5"}) != k
+
+
+def test_a_model_switch_keeps_its_predecessor_on_real_traffic():
+    """capture-03 records 27 and 28: same messages[0], different model. The
+    proxy sent previous_message_id null at exactly the request where Anthropic
+    would have said model_changed."""
+    from agentcostlab.proxy import _lineage_key
+
+    capture = ROOT / "data" / "raw" / "capture-03.jsonl"
+    if not capture.exists():
+        pytest.skip(f"capture-03 not present at {capture}; nothing to assert")
+    rows = [json.loads(line) for line in capture.read_text().splitlines() if line.strip()]
+
+    switches = [(a, b) for a, b in zip(rows, rows[1:])
+                if a.get("model") != b.get("model")
+                and (a.get("request_body") or {}).get("messages", [None])[:1]
+                == (b.get("request_body") or {}).get("messages", [None])[:1]]
+    assert switches, "capture-03 is supposed to contain a mid-conversation model switch"
+    for before, after in switches:
+        assert _lineage_key(before["request_body"]) == _lineage_key(after["request_body"]), \
+            "the switch still splits the lineage; model_changed stays unobservable"
+
+
+def test_distinct_conversations_still_get_distinct_lineages():
+    """#14's fix must not regress. Cross-threading unrelated populations
+    produced four spurious system_changed verdicts, and the health gate's
+    cross-lineage check is defined in terms of this key."""
+    from agentcostlab.proxy import _lineage_key
+
+    a = {"model": "m", "messages": [{"role": "user", "content": "conversation A"}]}
+    b = {"model": "m", "messages": [{"role": "user", "content": "conversation B"}]}
+    assert _lineage_key(a) != _lineage_key(b)
 
 
 def test_client_disconnect_propagates_and_still_records(servers):
@@ -337,7 +376,9 @@ def test_malformed_messages_shapes_do_not_collide():
         {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
         {"model": "other", "messages": [{"role": "user", "content": "hi"}]},
     )}
-    assert len(keys) == 3, "missing and empty messages are both 'no seed'; the rest differ"
+    # Two, not three: the last pair differs only in model, and that no longer
+    # splits a lineage — see test_lineage_key_is_the_first_message_only.
+    assert len(keys) == 2, "missing and empty messages are both 'no seed'"
 
 
 def test_absent_diagnostics_is_recorded_differently_from_a_null_one(servers):

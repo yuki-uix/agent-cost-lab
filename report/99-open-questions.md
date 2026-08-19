@@ -49,6 +49,11 @@ E2 的立论是「两类工具成本曲线相反，而生态用同一个指标�
 
 ## 仪器本身的已知盲点
 
+- **`/compact` 之后的一轮观测不到。** 代理用 `messages[0]` 认对话，而压缩会开出一段
+  首条消息全新的对话，于是压缩后第一个请求发 `previous_message_id: null`，
+  Anthropic 无从比对，`messages_changed` 永远拿不到。已实测（capture-03，
+  `/compact` 标记在 `fec6a430` 的 message[2]）。换模型那一半已修（#41），
+  compact 这一半需要先做设计决策——最顺手的兜底正是 #14 删掉的全局串接。
 - 同一 lineage 的并发请求可能挂到错误的前驱上。主 capture 未观测到，但代理没有防护。
 - 强制 `accept-encoding: identity` 关闭了压缩，本地带宽无所谓，但这意味着
   本仓库测得的 `request_bytes` 是未压缩值，不能当作线路上的字节数。

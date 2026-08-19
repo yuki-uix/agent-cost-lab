@@ -356,3 +356,36 @@ def test_absent_diagnostics_is_recorded_differently_from_a_null_one(servers):
     present = _records(servers)[-1]
     assert present["diagnostics_present"] is True, \
         "upstream sent the key; the ledger must say so even when the value is null"
+
+
+def test_stream_complete_is_false_when_the_client_walks_away(servers):
+    """The flag exists to tell a client that hung up from the ledger losing
+    data. Both leave a record; only the second is a defect. Nothing tested the
+    proxy end of that distinction — the health gate's use of the flag was
+    covered, its production was not.
+    """
+    before = len(_records(servers))
+    _stream(stop_after=2)
+    time.sleep(0.6)
+    records = _records(servers)
+    assert len(records) == before + 1
+    aborted = records[-1]
+    assert aborted["stream_complete"] is False, \
+        "a stream the client abandoned must not be recorded as complete"
+
+    # And the shape #18 assumed is not the usual one. `message_start` carries
+    # usage and arrives first, so a client that leaves mid-stream still leaves
+    # usage behind. The health gate keys "lost data" on (no usage AND complete)
+    # and "client aborted" on (no usage AND incomplete); this record is neither,
+    # and being neither is correct — nothing was lost.
+    assert aborted["usage"], (
+        "an abort after message_start keeps its usage; if this ever fails the "
+        "health gate's two lists need revisiting, because a third shape exists"
+    )
+
+
+def test_stream_complete_is_true_only_after_the_body_is_read_to_the_end(servers):
+    httpx.post(f"{PROXY}/v1/messages", json=BODY, timeout=30.0).read()
+    finished = _records(servers)[-1]
+    assert finished["stream_complete"] is True
+    assert finished["usage"], "a complete stream should also have yielded usage"

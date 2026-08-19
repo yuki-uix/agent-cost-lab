@@ -228,7 +228,55 @@ existing entry, and never edit the text an entry corrects.
 
 Format: `**YYYY-MM-DD** — <what was wrong> → <correction>`
 
-_None yet._
+**2026-08-19** — E2's reasoning supports 2.1 with "RTK's own README conceding
+1.6% on a 50-turn/150k session against an advertised 80%". → **That text is not
+in RTK's README.** Grepped at the pinned commit
+`b34be37caf3796b69a50952a28e60e32b5daad43` for `1.6`, `1.6 `, `50-turn`,
+`50 turn`, `150k`, `150,000`, `150_000`: zero hits, re-derived independently by
+the reviewer. The 1.6% figure is the survey author's own estimate, not a
+concession by the tool. The README's headline is also **90% of bash output**,
+not 80% savings. The 2.1 prediction cell (2–5%) is unaffected and stands; what
+this corrects is the evidence cited for it. Established in #30.
+
+**2026-08-19** — E2's stated headline is that "the two kinds have opposite cost
+profiles and **the ecosystem reports them with the same metric**", and 2.1
+assumes RTK conflates token reduction with dollar savings. → **RTK draws the
+distinction itself, in its README's second paragraph**, naming bash output as
+what it measures and stating that this is not the same as cutting the bill by
+the same ratio. For this tool the premise is false: the conflation belongs to
+the survey summarising it, not to the tool. Whether E2 is testing "the tools
+overclaim" or "the summaries of them do" is therefore undetermined, and the two
+are different experiments. Established in #30. (What to do about it is not this
+file's business — see report/99-open-questions.md.)
+
+**2026-08-19** — E2's reasoning states that preventive tools "(RTK, lean-ctx)
+compress output *before* it enters context. They never rewrite history, so
+**they cannot break the cached prefix**." → **lean-ctx does rewrite history.**
+At the pinned commit `8a3d23b317c98b39704543c9acb8b7cc8992c63d`,
+`rust/src/proxy/history_prune.rs` defines `prune_history_range()`, which mutates
+`tool_result` blocks in messages already sent, and `SECURITY.md` states the
+proxy "reads and rewrites every request body". What keeps it cache-safe is a
+different mechanism, not the absence of rewriting: `rust/src/proxy/cache_safety.rs`
+confines rewrites to a window computed by `cached_prefix_len()`. Verified at
+those files by the reviewer. The preventive/retroactive binary has no slot for
+this third case, and 2.3 reasons from that classification. Established in #30.
+
+**2026-08-19** — 1.2's `actual` cell reads "0% (0 of **63** comparable turns)",
+and the results header reads "63 comparable turns". → The capture holds 63
+*pairs* and **62 comparable** ones. Record 46 carries `usage: {}` and yields no
+signal; `scripts/calibrate_attributor.py` reports `pairs: 63 / comparable: 62`.
+The 0% is unaffected.
+
+**2026-08-19** — 1.2 asks "what share of *turns* diverge at all?" and was filled
+before the product decision in #22 settled that the attributor reports **whether
+the cache broke**, not whether text changed. → The recorded 0% counts turns
+where the cache broke. Under a plain reading of "diverge", the same capture
+gives **26 of 62 turns (42%)** carrying real text divergence that left the cache
+intact. **Both fall outside the predicted 10–20%, so 1.2 is WRONG under either
+reading** — recorded here because the definition was settled after the row was
+filled, by a decision this file's author proposed, and the verdict not turning
+on that choice is what makes the erratum a clarification rather than a
+convenience. The number stands; this pins which of the two it counts.
 
 ---
 

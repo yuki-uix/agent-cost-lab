@@ -1,8 +1,12 @@
-"""The calibration script reported `agreement 100.0% (62/62)` on a capture whose
-ground truth had exactly one class, where a constant "did not break" function
-scores the same 100%. These tests run the real entry point — importing and
-re-implementing its logic would pass just as happily after someone adds a path
-around it.
+"""The calibration script has twice reported a number that meant nothing.
+
+First `agreement 100.0% (62/62)` on a ground truth with one class, where a
+constant "did not break" scores the same. Then, once a real break existed, it
+scored that break as an over-report: `unavailable` — the API saying it could
+not determine a reason — was mapped to the same value as "nothing changed".
+
+These tests run the real entry point. Importing and re-implementing its logic
+would pass just as happily after someone adds a path around it.
 """
 from __future__ import annotations
 
@@ -13,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-# "agreement 71.4%" (split) or "agreement rate: 71.4%" (tie) — the phrasing
-# differs by branch and these tests are about the number, not the wording.
+# Matched loosely on purpose: these tests are about whether a rate is printed
+# at all, never about the wording around it.
 RATE = re.compile(r"agreement[^\n]*?\d+\.\d%")
 
 spec = importlib.util.spec_from_file_location(
@@ -54,51 +58,95 @@ def run(monkeypatch, capsys, path) -> str:
     return capsys.readouterr().out
 
 
+def chain(n=8, **overrides):
+    rows = [rec(0)] + [rec(i, prev=f"msg_{i-1}") for i in range(1, n)]
+    return rows
+
+
 def test_single_class_ground_truth_reports_no_rate(tmp_path, monkeypatch, capsys):
     """The shape of the 2026-08-18 capture: the cache never broke, so every
-    comparable pair is `no_divergence`."""
-    rows = [rec(0)] + [rec(i, prev=f"msg_{i-1}") for i in range(1, 8)]
-    out = run(monkeypatch, capsys, write(tmp_path, rows))
-
+    comparable pair is the same class."""
+    out = run(monkeypatch, capsys, write(tmp_path, chain()))
     assert "DEGENERATE GROUND TRUTH" in out
-    # "no agreement rate reported" legitimately contains the word; what must be
-    # absent is a *percentage* attached to it. Matched loosely on purpose: the
-    # script prints the rate as "agreement N%" on a split and "agreement rate:
-    # N%" on a tie, and this assertion must not depend on which.
-    assert not re.search(RATE, out), \
-        "a rate a constant would match must not be printed"
-    assert "best order" not in out.lower(), "no order can be ranked on one class"
-    assert "constant-`no_divergence` attributor scores" in out
+    assert not re.search(RATE, out), "a rate a constant would match must not be printed"
 
 
-def test_it_says_when_none_of_the_truth_came_from_the_official_api(
-        tmp_path, monkeypatch, capsys):
-    rows = [rec(0)] + [rec(i, prev=f"msg_{i-1}") for i in range(1, 8)]
-    out = run(monkeypatch, capsys, write(tmp_path, rows))
-    assert "from official diagnostics: 0" in out
-    assert "this capture has 0 verdicts" in out
-
-
-def test_two_classes_still_get_a_rate(tmp_path, monkeypatch, capsys):
-    """The refusal is about a degenerate ground truth, not about caution. Once
-    the cache actually breaks, the script must go back to scoring."""
-    rows = [rec(0)] + [rec(i, prev=f"msg_{i-1}") for i in range(1, 8)]
-    # One turn where the system prompt changed and the cache did not survive.
+def test_a_partial_break_is_recognised(tmp_path, monkeypatch, capsys):
+    """capture-02 record 61's shape. `cache_read` stayed at 155,169 — non-zero,
+    so the old `cache_read > 0` rule called it clean while 2,822 tokens were
+    being paid for twice. The identity against the predecessor sees it."""
+    rows = chain()
+    rows[4]["usage"] = {"input_tokens": 10, "cache_read_input_tokens": 5000,
+                        "cache_creation_input_tokens": 800}
+    # reads the same 5000 back, so the predecessor's 800 were lost
+    rows[5]["usage"] = {"input_tokens": 900, "cache_read_input_tokens": 5000,
+                        "cache_creation_input_tokens": 0}
     rows[5]["request_body"] = body(system="a different prompt", turns=6)
-    rows[5]["usage"]["cache_read_input_tokens"] = 0
 
     out = run(monkeypatch, capsys, write(tmp_path, rows))
-    assert "DEGENERATE GROUND TRUTH" not in out
+    assert "DEGENERATE GROUND TRUTH" not in out, out
+    assert "break      1" in out or "break       1" in out, out
     assert re.search(RATE, out), out
 
 
-def test_official_diagnostics_are_preferred_over_the_usage_fallback(
+def test_an_inconclusive_verdict_is_excluded_not_scored_as_a_negative(
         tmp_path, monkeypatch, capsys):
-    rows = [rec(0)] + [rec(i, prev=f"msg_{i-1}") for i in range(1, 8)]
+    """`unavailable` means the API could not determine a reason. Mapping it to
+    the same value as "nothing changed" charged the attributor's correct answer
+    against it as an over-report."""
+    rows = chain()
+    rows[5]["diagnostics"] = {"cache_miss_reason": {"type": "unavailable"}}
+    rows[5]["diagnostics_present"] = True
+    out = run(monkeypatch, capsys, write(tmp_path, rows))
+
+    assert "inconclusive" in out
+    assert "excluded rather than scored as negatives" in out
+    assert "0 conclusive verdicts" in out
+
+
+def test_a_conclusive_verdict_is_still_compared(tmp_path, monkeypatch, capsys):
+    """Excluding the inconclusive ones must not exclude the useful ones."""
+    rows = chain()
     rows[5]["request_body"] = body(system="a different prompt", turns=6)
-    rows[5]["usage"]["cache_read_input_tokens"] = 0
+    rows[5]["usage"] = {"input_tokens": 900, "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0}
     rows[5]["diagnostics"] = {"cache_miss_reason": {"type": "system_changed",
                                                     "cache_missed_input_tokens": 40000}}
+    rows[5]["diagnostics_present"] = True
     out = run(monkeypatch, capsys, write(tmp_path, rows))
-    assert "official signal: diagnostics.cache_miss_reason.type" in out
-    assert "from official diagnostics: 1" in out
+    assert "conclusive     1" in out, out
+    assert "which component?" in out
+    assert "0 conclusive verdicts" not in out, out
+
+
+def test_one_break_is_labelled_as_n_equals_1(tmp_path, monkeypatch, capsys):
+    """A 49/49 built from 48 no-breaks and one break is not a rate about
+    breaking. The script must say so rather than let the number stand alone."""
+    rows = chain()
+    rows[4]["usage"] = {"input_tokens": 10, "cache_read_input_tokens": 5000,
+                        "cache_creation_input_tokens": 800}
+    rows[5]["usage"] = {"input_tokens": 900, "cache_read_input_tokens": 5000,
+                        "cache_creation_input_tokens": 0}
+    rows[5]["request_body"] = body(system="a different prompt", turns=6)
+    out = run(monkeypatch, capsys, write(tmp_path, rows))
+    assert "n=1" in out, out
+
+
+def test_the_real_capture_is_no_longer_a_disagreement(monkeypatch, capsys):
+    """capture-02 record 61 was reported as `over-reported` — the attributor
+    being right, counted against it."""
+    capture = Path(__file__).resolve().parents[1] / "data" / "raw" / "capture-02.jsonl"
+    if not capture.exists():
+        pytest.skip(f"capture-02 not present at {capture}; nothing to assert")
+    out = run(monkeypatch, capsys, capture)
+    assert "MISS" not in out, out
+    assert "segment orders that change this verdict: 0 of 120" in out, out
+
+
+def test_the_first_capture_still_refuses(monkeypatch, capsys):
+    """#25's refusal must not regress: capture.jsonl has one class."""
+    capture = Path(__file__).resolve().parents[1] / "data" / "raw" / "capture.jsonl"
+    if not capture.exists():
+        pytest.skip(f"capture not present at {capture}; nothing to assert")
+    out = run(monkeypatch, capsys, capture)
+    assert "DEGENERATE GROUND TRUTH" in out, out

@@ -439,7 +439,12 @@ def test_suppression_is_order_invariant_on_real_capture():
         pytest.skip(f"real capture not present at {capture}; nothing to assert")
     cal = _load_calibrate()
     rows = cal.load_records(capture)
-    pairs = [(p, c) for p, c in cal.pair_by_previous(rows) if cal.official_signal(c) is not None]
+    # Filtered on the ledger being readable, which is what this test needs.
+    # `official_signal` used to serve as that filter and no longer exists: #35
+    # split it into a ledger verdict and an official component, because folding
+    # them together scored "the API cannot tell you" as "nothing changed".
+    pairs = [(p, c) for p, c in cal.pair_by_previous(rows)
+             if cal.ledger_broke(p, c) is not None]
     assert pairs, "capture present but holds no comparable pairs"
 
     for prev, curr in pairs:

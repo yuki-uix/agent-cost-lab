@@ -22,6 +22,13 @@ The first of those is an assumption about behaviour; the other two are
 arithmetic on measured numbers. The one free parameter — what an ordinary turn
 would have written on the compaction turn — is swept across the observed range
 rather than picked, and the answer does not move.
+
+**Which way the behavioural assumption pushes.** After a compaction the model
+sees less context, so it may work worse and need *more* turns — turns that would
+not have happened in the un-compacted session. Holding the turns fixed therefore
+credits the compacted run with work it might not have got for free, and makes
+the un-compacted side look more expensive than it would have been. The number
+this produces is a **lower bound**: the real payback is at least this long.
 """
 from __future__ import annotations
 
@@ -97,6 +104,7 @@ def payback(pre: list[dict], post: list[dict], model_key: str,
 
     actual = counterfactual = 0.0
     crossed = None
+    one_off = 0.0
     for turn, record in enumerate(post, start=1):
         usage = normalise("anthropic", record["usage"])
         actual += cost(usage, model_key, rates)
@@ -104,6 +112,10 @@ def payback(pre: list[dict], post: list[dict], model_key: str,
             hypothetical = Usage(cache_read=context_before,
                                  input_uncached=usage.input_uncached,
                                  output=usage.output, cache_write_1h=turn1_write)
+            # Computed here rather than rebuilt afterwards: the reported one-off
+            # and the crossing point must come from the same arithmetic, or the
+            # two drift and the report quotes a number the curve never used.
+            one_off = cost(usage, model_key, rates) - cost(hypothetical, model_key, rates)
         else:
             hypothetical = Usage(cache_read=usage.cache_read + cut,
                                  input_uncached=usage.input_uncached,
@@ -114,11 +126,7 @@ def payback(pre: list[dict], post: list[dict], model_key: str,
         if crossed is None and actual < counterfactual:
             crossed = turn
 
-    rate = rates[model_key]
-    per_turn = cut * rate.cache_read / 1e6
-    one_off = cost(normalise("anthropic", post[0]["usage"]), model_key, rates) - cost(
-        Usage(cache_read=context_before, cache_write_1h=turn1_write,
-              input_uncached=0, output=0), model_key, rates)
+    per_turn = cut * rates[model_key].cache_read / 1e6
     return crossed, counterfactual - actual, one_off, per_turn
 
 

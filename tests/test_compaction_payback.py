@@ -79,3 +79,24 @@ def test_a_capture_with_no_compaction_says_so():
     if rows is None:
         pytest.skip("capture-01 not present")
     assert e3.find_compaction(rows) is None
+
+
+def test_the_one_off_and_the_crossing_come_from_the_same_arithmetic():
+    """They were computed twice, by two constructions that differed in whether
+    the counterfactual turn carried its input and output tokens. The gap was
+    $0.00006 — immaterial, and exactly the shape of drift this repo keeps
+    finding: one concept, two copies."""
+    from agentcostlab.pricing import cost, load_rates
+    from agentcostlab.providers import Usage, normalise
+
+    pre, post = e3.find_compaction(_capture())
+    rates = load_rates()
+    _, _, one_off, _ = e3.payback(pre, post, "anthropic/claude-opus-5", 571, rates)
+
+    usage = normalise("anthropic", post[0]["usage"])
+    counterfactual = Usage(cache_read=e3._context(pre[-1]["usage"]),
+                           input_uncached=usage.input_uncached,
+                           output=usage.output, cache_write_1h=571)
+    expected = (cost(usage, "anthropic/claude-opus-5", rates)
+                - cost(counterfactual, "anthropic/claude-opus-5", rates))
+    assert one_off == pytest.approx(expected, abs=1e-12)

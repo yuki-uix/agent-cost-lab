@@ -11,3 +11,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.capture.pid
+.capture.pid.file
+data/raw/proxy.log

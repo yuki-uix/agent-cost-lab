@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from agentcostlab.ledger import broke_cache
 from agentcostlab.attribute import (
     COMPONENTS,
     Divergence,
@@ -548,9 +549,7 @@ def test_the_real_partial_break_is_attributed():
         usage, prev_usage = curr.get("usage"), (prev or {}).get("usage")
         if not usage or not prev_usage:
             continue
-        expected = (prev_usage.get("cache_read_input_tokens", 0)
-                    + prev_usage.get("cache_creation_input_tokens", 0))
-        if usage.get("cache_read_input_tokens", 0) != expected:
+        if broke_cache(prev, curr):
             broke.append((prev, curr))
 
     assert len(broke) == 1, f"expected exactly the one known break, found {len(broke)}"
@@ -577,9 +576,7 @@ def test_neither_capture_gains_a_false_break():
             if not usage or not prev_usage:
                 continue
             checked += 1
-            expected = (prev_usage.get("cache_read_input_tokens", 0)
-                        + prev_usage.get("cache_creation_input_tokens", 0))
-            ledger_broke = usage.get("cache_read_input_tokens", 0) != expected
+            ledger_broke = broke_cache(prev, curr)
             d = attribute(prev["request_body"], curr["request_body"])
             assert (d is not None and not d.suppressed) == ledger_broke, \
                 f"{name}: attributor and ledger disagree"

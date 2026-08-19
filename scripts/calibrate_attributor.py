@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from agentcostlab.ledger import broke_cache as ledger_broke  # noqa: E402
 from agentcostlab.attribute import (  # noqa: E402
     COMPONENTS,
     attribute,
@@ -105,39 +106,28 @@ def official_component(curr: dict) -> str | None:
 
 
 def official_status(curr: dict) -> str:
-    """``conclusive`` / ``inconclusive`` / ``clean`` / ``absent``."""
+    """``conclusive`` / ``inconclusive`` / ``clean`` / ``absent`` / ``unrecorded``.
+
+    ``unrecorded`` and ``absent`` are kept apart deliberately. A record from
+    before proxy.py grew `diagnostics_present` cannot say whether upstream
+    returned the key; a record with it set to False says upstream did not. The
+    first version of this function collapsed them, which is the same "unknown
+    folded into no" that #25 added the field to prevent and #26 reports as
+    UNDECIDABLE. All 63 pairs of the 2026-08-18 capture landed in `absent`,
+    reading as "Anthropic sent nothing" when the truth is "the proxy did not
+    record it yet".
+    """
+    present = curr.get("diagnostics_present")
     diagnostics = curr.get("diagnostics")
-    if curr.get("diagnostics_present") is False:
-        return "absent"
     if not isinstance(diagnostics, dict):
-        return "clean" if curr.get("diagnostics_present") else "absent"
+        if present is None:
+            return "unrecorded"
+        return "clean" if present else "absent"
     reason = diagnostics.get("cache_miss_reason")
     if not isinstance(reason, dict):
         return "inconclusive"
     kind = reason.get("type")
     return "inconclusive" if kind in INCONCLUSIVE else "conclusive"
-
-
-def ledger_broke(prev: dict, curr: dict) -> bool | None:
-    """Did the cache break, judged only by the usage ledger? ``None`` if unknown.
-
-    The identity a surviving prefix must satisfy::
-
-        curr.cache_read == prev.cache_read + prev.cache_creation
-
-    The old rule was ``cache_read > 0`` on ``curr`` alone, which cannot see a
-    *partial* break — and the only break either capture contains is partial.
-    capture-02 record 61 read 155,169 of an expected 157,991: non-zero, so the
-    old rule called it clean while 2,822 tokens were being paid for twice.
-
-    An absent or empty usage is "not measured", never "read zero".
-    """
-    usage, prev_usage = curr.get("usage"), prev.get("usage")
-    if not usage or not prev_usage:
-        return None
-    expected = (prev_usage.get("cache_read_input_tokens", 0)
-                + prev_usage.get("cache_creation_input_tokens", 0))
-    return usage.get("cache_read_input_tokens", 0) != expected
 
 
 def _refuse_single_class(label: str, buckets: Counter) -> bool:
@@ -170,7 +160,7 @@ def main() -> None:
 
     print(f"records: {len(records)}   pairs (by injected_previous_message_id): {len(pairs)}")
     print("official diagnostics on those pairs:")
-    for kind in ("conclusive", "inconclusive", "clean", "absent"):
+    for kind in ("conclusive", "inconclusive", "clean", "absent", "unrecorded"):
         if status[kind]:
             print(f"  {kind:14s} {status[kind]}")
     print()
@@ -200,7 +190,22 @@ def main() -> None:
                 else:
                     wrong += 1
                     misses.append((prev, curr, broke, d))
-            print(f"  agreement: {agree}/{len(ledger)} = {agree/len(ledger):.1%}")
+            # Per class, never blended. 49/49 on 48 no-breaks and one break is
+            # a number the majority class wrote; quoting it as "100% accurate"
+            # is the metric error this repo exists to correct, and one already
+            # made once here.
+            hits = Counter()
+            for prev, curr, broke in ledger:
+                d = attribute(prev["request_body"], curr["request_body"])
+                if (d is not None and not d.suppressed) == broke:
+                    hits["break" if broke else "no break"] += 1
+            for cls in ("break", "no break"):
+                total = buckets[cls]
+                if not total:
+                    continue
+                print(f"  {cls:9s} {hits[cls]}/{total} = {hits[cls]/total:.1%}"
+                      + (f"   <- n={total}, not a rate" if total <= 5 else ""))
+
             # Order must not move this. #24 made suppression independent of the
             # segment order; asserting it here keeps that honest on real data.
             moved = [perm for perm in itertools.permutations(COMPONENTS)
@@ -213,10 +218,11 @@ def main() -> None:
                 print(f"    MISS {prev.get('response_id')} -> {curr.get('response_id')}"
                       f"  ledger={'break' if broke else 'no break'}"
                       f"  mine={'break' if d and not d.suppressed else 'no break'}")
-            if len(buckets) >= 2 and buckets["break"] <= 2:
-                print(f"  NOTE: only {buckets['break']} break(s) in this capture."
-                      " The rate is dominated by the")
-                print("        no-break class; treat the break side as n=1, not as a rate.")
+            if wrong == 0:
+                print("  NOTE: nothing disagreed. Per the standing rule that is"
+                      " grounds for auditing")
+                print("        this script for special-casing, not for"
+                      " celebrating the numbers.")
     print()
 
     print("=== which component?  (ground truth: official cache_miss_reason) ===")

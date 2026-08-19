@@ -85,8 +85,11 @@ def test_a_partial_break_is_recognised(tmp_path, monkeypatch, capsys):
 
     out = run(monkeypatch, capsys, write(tmp_path, rows))
     assert "DEGENERATE GROUND TRUTH" not in out, out
-    assert "break      1" in out or "break       1" in out, out
-    assert re.search(RATE, out), out
+    # Reported per class, never blended: a rate over 5 no-breaks and 1 break is
+    # a number the majority class wrote.
+    assert re.search(r"^\s+break\s+1/1 = ", out, re.M), out
+    assert not re.search(r"agreement:\s+\d+/\d+", out.split("which component")[0]), \
+        "the ledger section must not print a blended rate"
 
 
 def test_an_inconclusive_verdict_is_excluded_not_scored_as_a_negative(
@@ -129,7 +132,7 @@ def test_one_break_is_labelled_as_n_equals_1(tmp_path, monkeypatch, capsys):
                         "cache_creation_input_tokens": 0}
     rows[5]["request_body"] = body(system="a different prompt", turns=6)
     out = run(monkeypatch, capsys, write(tmp_path, rows))
-    assert "n=1" in out, out
+    assert "n=1, not a rate" in out, out
 
 
 def test_the_real_capture_is_no_longer_a_disagreement(monkeypatch, capsys):
@@ -150,3 +153,32 @@ def test_the_first_capture_still_refuses(monkeypatch, capsys):
         pytest.skip(f"capture not present at {capture}; nothing to assert")
     out = run(monkeypatch, capsys, capture)
     assert "DEGENERATE GROUND TRUTH" in out, out
+
+
+@pytest.mark.parametrize("record,expected", [
+    ({"diagnostics": None}, "unrecorded"),
+    ({"diagnostics": None, "diagnostics_present": True}, "clean"),
+    ({"diagnostics": None, "diagnostics_present": False}, "absent"),
+    ({"diagnostics": {"cache_miss_reason": {"type": "unavailable"}},
+      "diagnostics_present": True}, "inconclusive"),
+    ({"diagnostics": {"cache_miss_reason": {"type": "previous_message_not_found"}},
+      "diagnostics_present": True}, "inconclusive"),
+    ({"diagnostics": {"cache_miss_reason": None}, "diagnostics_present": True},
+     "inconclusive"),
+    ({"diagnostics": {"cache_miss_reason": {"type": "system_changed"}},
+      "diagnostics_present": True}, "conclusive"),
+])
+def test_official_status_keeps_unknown_apart_from_no(record, expected):
+    """`unrecorded` and `absent` are different facts and were briefly the same
+    label. A record predating `diagnostics_present` cannot say whether upstream
+    returned the key; one with it False says upstream did not. Collapsing them
+    reported all 63 pairs of the 2026-08-18 capture as "Anthropic sent nothing"
+    when the truth was "the proxy did not record it yet" — the same unknown-as-no
+    that #25 added the field to prevent."""
+    assert calib.official_status(record) == expected
+
+
+def test_a_pre_field_capture_is_reported_as_unrecorded(tmp_path, monkeypatch, capsys):
+    out = run(monkeypatch, capsys, write(tmp_path, chain()))
+    assert "unrecorded" in out, out
+    assert "absent" not in out, "records predating the field are not evidence of absence"

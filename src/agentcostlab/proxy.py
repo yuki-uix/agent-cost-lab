@@ -80,8 +80,19 @@ def _lineage_key(body: dict) -> str:
     The collision this opens — two conversations whose first messages are
     byte-identical now share a lineage — was measured across all three captures
     before the change: 0 merges in the first two, and exactly 1 in the third,
-    which is the model switch this fixes. The cross-lineage health gate remains
-    the guard if it ever happens for real.
+    which is the model switch this fixes. Counted a second way, by looking for a
+    lineage containing several disjoint chains, all 57 lineage groups across the
+    three captures are clean.
+
+    **The cross-lineage health gate cannot guard this.** It asks whether a
+    request's predecessor belongs to a different lineage, and it asks that with
+    this very function — so two conversations that collide here are, to it, one
+    conversation, and the check is vacuously true. A collision would produce
+    #14's failure mode (a plausible-looking wrong verdict, not an error) with
+    the gate built to catch #14 looking straight past it.
+
+    The independent detector is "one lineage, several disjoint chains", which
+    does not consult this function. It is not wired into the health gate yet.
     """
     messages = body.get("messages")
     first = messages[0] if isinstance(messages, list) and messages else None

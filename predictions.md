@@ -245,9 +245,9 @@ distinction itself, in its README's second paragraph**, naming bash output as
 what it measures and stating that this is not the same as cutting the bill by
 the same ratio. For this tool the premise is false: the conflation belongs to
 the survey summarising it, not to the tool. Whether E2 is testing "the tools
-overclaim" or "the summaries of them do" is now an open design question, and it
-changes what the experiment is for. It must be settled before any paid run.
-Established in #30.
+overclaim" or "the summaries of them do" is therefore undetermined, and the two
+are different experiments. Established in #30. (What to do about it is not this
+file's business — see report/99-open-questions.md.)
 
 **2026-08-19** — E2's reasoning states that preventive tools "(RTK, lean-ctx)
 compress output *before* it enters context. They never rewrite history, so
@@ -269,11 +269,14 @@ The 0% is unaffected.
 
 **2026-08-19** — 1.2 asks "what share of *turns* diverge at all?" and was filled
 before the product decision in #22 settled that the attributor reports **whether
-the cache broke**, not whether text changed. → Under that decision 0% is
-correct. Under a plain reading of "diverge", the same capture gives **26 of 62
-turns (42%)** carrying real text divergence that left the cache intact. The
-number stands; this pins which of the two it means, since a later reader has no
-way to tell.
+the cache broke**, not whether text changed. → The recorded 0% counts turns
+where the cache broke. Under a plain reading of "diverge", the same capture
+gives **26 of 62 turns (42%)** carrying real text divergence that left the cache
+intact. **Both fall outside the predicted 10–20%, so 1.2 is WRONG under either
+reading** — recorded here because the definition was settled after the row was
+filled, by a decision this file's author proposed, and the verdict not turning
+on that choice is what makes the erratum a clarification rather than a
+convenience. The number stands; this pins which of the two it counts.
 
 ---
 

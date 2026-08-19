@@ -261,6 +261,20 @@ confines rewrites to a window computed by `cached_prefix_len()`. Verified at
 those files by the reviewer. The preventive/retroactive binary has no slot for
 this third case, and 2.3 reasons from that classification. Established in #30.
 
+**2026-08-19** — 1.1 asks which `cache_miss_reason` type dominates, and nothing
+in this file warns that one type cannot appear in the answer. → **Misses caused
+by `/compact` are structurally unobservable through this repo's proxy.** It
+identifies a conversation by `messages[0]`, and compaction starts one with a new
+first message, so the post-compact request carries no `previous_message_id` and
+Anthropic returns no verdict. Measured on capture-03 (the `/compact` marker is in
+lineage `fec6a430`, message[2]). The blind spot was accepted on 2026-08-19 (#42)
+rather than fixed, because both candidate fixes trade a real correctness risk for
+an observation whose value is not yet established. Consequence for reading 1.1:
+whatever distribution it eventually reports is **conditional on the miss not
+being a compaction**, and 1.3 found compaction to be the only one of the survey's
+six "cache killers" that occurs in real data. The excluded class is plausibly the
+largest one.
+
 **2026-08-19** — 1.2's `actual` cell reads "0% (0 of **63** comparable turns)",
 and the results header reads "63 comparable turns". → The capture holds 63
 *pairs* and **62 comparable** ones. Record 46 carries `usage: {}` and yields no

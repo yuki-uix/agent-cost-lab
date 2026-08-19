@@ -332,9 +332,19 @@ def _cache_directives(component: str, value: object) -> frozenset[str]:
         evidence is about *where* the marker sits.
     *   What it says is a different matter, and is what this compares.
     *   Adding a marker whose value is already in use changes neither the set
-        nor which buckets are consulted. Neither capture contains a single
-        marker-count change, so there is no evidence for a count rule and this
-        does not invent one.
+        nor which buckets are consulted. Evidenced: across both captures a
+        component's marker count varies (1 and 3 in `messages`, 1 and 2 in
+        `system`) without the cache ever breaking on that account.
+
+    What a set also discards, and what there is no evidence for either way: the
+    pairing between a value and the marker carrying it. Two markers with
+    *different* ttls swapping positions would read as no change here. Across 234
+    component observations in both captures, **a component never carries more
+    than one distinct value** — every marker in a segment asks for the same
+    bucket. So this region is unreachable in anything observed, and the set is
+    in practice answering "which bucket does this segment use", which is the
+    mechanism itself. Should a segment ever mix ttls, this needs revisiting
+    rather than trusting.
     """
     blocks: list[object] = []
     if component == "messages" and isinstance(value, list):

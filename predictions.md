@@ -271,9 +271,12 @@ lineage `fec6a430`, message[2]). The blind spot was accepted on 2026-08-19 (#42)
 rather than fixed, because both candidate fixes trade a real correctness risk for
 an observation whose value is not yet established. Consequence for reading 1.1:
 whatever distribution it eventually reports is **conditional on the miss not
-being a compaction**, and 1.3 found compaction to be the only one of the survey's
-six "cache killers" that occurs in real data. The excluded class is plausibly the
-largest one.
+being a compaction**. Compaction's share is **unknown** and this file does not
+guess at it: across all three captures the five observed real misses were caused
+by `cache_control` ttl churn (four) and a system-prompt edit (one), none by any
+of the survey's six "cache killers" — and the dominant observed cause is not on
+that list at all. The decision is provisional (#42, "for now"); it is reopened if
+a capture ever shows compaction misses carrying material cost.
 
 **2026-08-19** — 1.2's `actual` cell reads "0% (0 of **63** comparable turns)",
 and the results header reads "63 comparable turns". → The capture holds 63

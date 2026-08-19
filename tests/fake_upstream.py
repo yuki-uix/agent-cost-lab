@@ -63,6 +63,22 @@ async def messages(request: Request):
         }).encode() + b'\n\n')
         return Response(content=payload, media_type="text/event-stream")
 
+    # An upstream that stalls before its first event. The record that motivated
+    # #18 aborted before `message_start` ever landed — 3.74s total with its
+    # first byte at 3.737s — leaving usage None and nothing else wrong. That
+    # shape is the one the health gate's "client aborted" branch exists for, and
+    # racing a real client against a fast upstream cannot produce it reliably.
+    # Delaying the first event makes it deterministic.
+    if body.get("model") == "slow-start":
+        async def stalled():
+            try:
+                await asyncio.sleep(3.0)
+                yield b'event: message_start\ndata: {"type":"message_start"}\n\n'
+            except asyncio.CancelledError:
+                STATE["cancelled"] = True
+                raise
+        return StreamingResponse(stalled(), media_type="text/event-stream")
+
     if body.get("stream") is False:
         return JSONResponse({"id": "msg_fake_json", "type": "message",
                              "role": "assistant", "content": [],

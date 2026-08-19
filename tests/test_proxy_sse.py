@@ -133,17 +133,56 @@ def test_interleaved_lineages_do_not_cross_thread(servers):
     assert seen["last_body"]["diagnostics"]["previous_message_id"] == "msg_fake_01"
 
 
-def test_lineage_key_is_model_and_first_message_only():
-    """The trap: hashing system/tools would split a lineage exactly when the
-    system prompt changes mid-conversation. The key must ignore both."""
+def test_lineage_key_is_the_first_message_only():
+    """Anything that changes during the events E1 measures must stay out of the
+    identity of what is being measured.
+
+    system and tools were kept out from the start for that reason. `model` was
+    not, on the reasoning that it is fixed for a conversation's life — and a
+    mid-conversation model switch is one of the three actions the capture plan
+    asks for, the only one that can produce `model_changed`.
+    """
     from agentcostlab.proxy import _lineage_key
 
     base = {"model": "claude-sonnet-5",
             "messages": [{"role": "user", "content": "seed"}]}
     k = _lineage_key(base)
     assert _lineage_key({**base, "system": "changed", "tools": [{"name": "x"}]}) == k
+    assert _lineage_key({**base, "model": "claude-opus-5"}) == k, \
+        "a model switch must stay in its lineage, or model_changed is unobservable"
     assert _lineage_key({**base, "messages": [{"role": "user", "content": "other"}]}) != k
-    assert _lineage_key({**base, "model": "claude-opus-5"}) != k
+
+
+def test_a_model_switch_keeps_its_predecessor_on_real_traffic():
+    """capture-03 records 27 and 28: same messages[0], different model. The
+    proxy sent previous_message_id null at exactly the request where Anthropic
+    would have said model_changed."""
+    from agentcostlab.proxy import _lineage_key
+
+    capture = ROOT / "data" / "raw" / "capture-03.jsonl"
+    if not capture.exists():
+        pytest.skip(f"capture-03 not present at {capture}; nothing to assert")
+    rows = [json.loads(line) for line in capture.read_text().splitlines() if line.strip()]
+
+    switches = [(a, b) for a, b in zip(rows, rows[1:])
+                if a.get("model") != b.get("model")
+                and (a.get("request_body") or {}).get("messages", [None])[:1]
+                == (b.get("request_body") or {}).get("messages", [None])[:1]]
+    assert switches, "capture-03 is supposed to contain a mid-conversation model switch"
+    for before, after in switches:
+        assert _lineage_key(before["request_body"]) == _lineage_key(after["request_body"]), \
+            "the switch still splits the lineage; model_changed stays unobservable"
+
+
+def test_distinct_conversations_still_get_distinct_lineages():
+    """#14's fix must not regress. Cross-threading unrelated populations
+    produced four spurious system_changed verdicts, and the health gate's
+    cross-lineage check is defined in terms of this key."""
+    from agentcostlab.proxy import _lineage_key
+
+    a = {"model": "m", "messages": [{"role": "user", "content": "conversation A"}]}
+    b = {"model": "m", "messages": [{"role": "user", "content": "conversation B"}]}
+    assert _lineage_key(a) != _lineage_key(b)
 
 
 def test_client_disconnect_propagates_and_still_records(servers):
@@ -337,7 +376,9 @@ def test_malformed_messages_shapes_do_not_collide():
         {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
         {"model": "other", "messages": [{"role": "user", "content": "hi"}]},
     )}
-    assert len(keys) == 3, "missing and empty messages are both 'no seed'; the rest differ"
+    # Two, not three: the last pair differs only in model, and that no longer
+    # splits a lineage — see test_lineage_key_is_the_first_message_only.
+    assert len(keys) == 2, "missing and empty messages are both 'no seed'"
 
 
 def test_absent_diagnostics_is_recorded_differently_from_a_null_one(servers):
@@ -356,3 +397,76 @@ def test_absent_diagnostics_is_recorded_differently_from_a_null_one(servers):
     present = _records(servers)[-1]
     assert present["diagnostics_present"] is True, \
         "upstream sent the key; the ledger must say so even when the value is null"
+
+
+def test_stream_complete_is_false_when_the_client_walks_away(servers):
+    """The flag exists to tell a client that hung up from the ledger losing
+    data. Both leave a record; only the second is a defect. Nothing tested the
+    proxy end of that distinction — the health gate's use of the flag was
+    covered, its production was not.
+    """
+    before = len(_records(servers))
+    _stream(stop_after=2)
+    time.sleep(0.6)
+    records = _records(servers)
+    assert len(records) == before + 1
+    aborted = records[-1]
+    assert aborted["stream_complete"] is False, \
+        "a stream the client abandoned must not be recorded as complete"
+
+    # And the shape #18 assumed is not the usual one. `message_start` carries
+    # usage and arrives first, so a client that leaves mid-stream still leaves
+    # usage behind. The health gate keys "lost data" on (no usage AND complete)
+    # and "client aborted" on (no usage AND incomplete); this record is neither,
+    # and being neither is correct — nothing was lost.
+    assert aborted["usage"], (
+        "an abort after message_start keeps its usage; if this ever fails the "
+        "health gate's two lists need revisiting, because a third shape exists"
+    )
+
+
+def test_stream_complete_is_true_only_after_the_body_is_read_to_the_end(servers):
+    httpx.post(f"{PROXY}/v1/messages", json=BODY, timeout=30.0).read()
+    finished = _records(servers)[-1]
+    assert finished["stream_complete"] is True
+    assert finished["usage"], "a complete stream should also have yielded usage"
+
+
+def test_an_abort_before_message_start_leaves_no_usage(servers):
+    """The shape that motivated #18: 3.74s total, first byte at 3.737s, no
+    usage, and nothing else wrong. It is the health gate's "client aborted"
+    branch — and the branch was only ever exercised on synthetic records.
+
+    Racing a real client against a fast upstream cannot produce it reliably, so
+    the fake upstream stalls before its first event instead. Deterministic.
+    """
+    async def run():
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            async with c.stream("POST", f"{PROXY}/v1/messages",
+                                json={**BODY, "model": "slow-start"}) as r:
+                assert r.status_code == 200
+                # leave immediately, before upstream has sent anything
+        return None
+
+    before = len(_records(servers))
+    asyncio.run(run())
+    time.sleep(0.6)
+    records = _records(servers)
+    assert len(records) == before + 1, "an early abort vanished from the ledger"
+    early = records[-1]
+    assert early["usage"] is None, "nothing was parsed, so there is no usage"
+    assert early["stream_complete"] is False
+    assert early["error"] is None, "an abandoned stream is not an instrument failure"
+
+    # And the gate must read that shape the way it was designed to: tolerated as
+    # a client walking away, never as the ledger losing data. Both sides of #18
+    # in one assertion — the proxy producing the shape and the gate classifying
+    # it — which is what "tests for both sides" was asking for.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "capture_health", ROOT / "scripts" / "capture_health.py")
+    health = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(health)
+    ok, bad, _ = health.check([early])
+    assert not any("ledger failure" in line for line in bad), bad
+    assert any("client-aborted" in line for line in ok + bad), (ok, bad)

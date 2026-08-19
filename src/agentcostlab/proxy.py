@@ -41,27 +41,62 @@ LAST_ID: dict[str, str | None] = {}
 def _lineage_key(body: dict) -> str:
     """Stable identity for the conversation lineage a request belongs to.
 
-    A conversation's seed is (model, messages[0]): the model is fixed and the
-    first message is the turn every later turn grows out of. The system prompt
-    and the tool list both change mid-conversation — that is exactly the cache
-    killer E1 sets out to measure — so hashing either of them in would turn every
-    such change into a brand-new lineage, whose next request sends
-    previous_message_id: null and gets no diagnostics. The instrument would
-    erase the thing it exists to record.
+    Keyed on ``messages[0]`` alone: the first message is the turn every later
+    turn grows out of.
+
+    ``model`` used to be hashed in too, on the reasoning that it is fixed for a
+    conversation's life. It is not. Switching model mid-conversation is one of
+    the three actions the capture plan asks for, and the only one that can
+    produce ``model_changed`` — and hashing the model in turned that switch into
+    a brand-new lineage, whose next request sends ``previous_message_id: null``
+    and gets no diagnostics. Measured on capture-03: record 28 shares record
+    27's ``messages[0]`` and differs only in model, and the proxy sent null at
+    exactly the request where Anthropic would have named the reason.
+
+    That is the failure the paragraph below already described for ``system`` and
+    ``tools``. ``model`` belongs with them, and the reason it does not belong in
+    the key is the same reason they do not: **it is one of the things E1
+    measures changing.** Anything that changes during the events this instrument
+    exists to record must stay out of the identity of what it is recording.
+
+    So: the system prompt and the tool list both change mid-conversation — that
+    is exactly the cache killer E1 sets out to measure — and hashing either of
+    them in would erase it the same way.
+
+    Not fixed by this: ``messages[0]`` itself changes across a ``/compact``,
+    which starts a conversation with a new first message. That erases
+    ``messages_changed`` the same way, and threading across it needs a design
+    decision rather than a smaller key — see the discussion on #41.
 
     sha256 over a canonical JSON encoding, not hash(): hash() is salted by
     PYTHONHASHSEED (unstable across processes) and cannot hash a dict.
 
     Defensive about shape: this runs on the request path, before any response
     exists, so it is not covered by the _observe guard. A body is only known to
-    be valid JSON, not valid for the API — `{"messages": {...}}` parses fine and
-    used to raise KeyError here, turning upstream's 400 into a proxy 500 and
+    be valid JSON, not valid for the API — ``{"messages": {...}}`` parses fine
+    and used to raise KeyError here, turning upstream's 400 into a proxy 500 and
     hiding the real error from the caller.
+
+    The collision this opens — two conversations whose first messages are
+    byte-identical now share a lineage — was measured across all three captures
+    before the change: 0 merges in the first two, and exactly 1 in the third,
+    which is the model switch this fixes. Counted a second way, by looking for a
+    lineage containing several disjoint chains, all 57 lineage groups across the
+    three captures are clean.
+
+    **The cross-lineage health gate cannot guard this.** It asks whether a
+    request's predecessor belongs to a different lineage, and it asks that with
+    this very function — so two conversations that collide here are, to it, one
+    conversation, and the check is vacuously true. A collision would produce
+    #14's failure mode (a plausible-looking wrong verdict, not an error) with
+    the gate built to catch #14 looking straight past it.
+
+    The independent detector is "one lineage, several disjoint chains", which
+    does not consult this function. It is not wired into the health gate yet.
     """
     messages = body.get("messages")
     first = messages[0] if isinstance(messages, list) and messages else None
-    raw = json.dumps([body.get("model"), first],
-                     ensure_ascii=False, sort_keys=True, default=str)
+    raw = json.dumps(first, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 

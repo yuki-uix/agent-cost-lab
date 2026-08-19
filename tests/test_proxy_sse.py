@@ -389,3 +389,43 @@ def test_stream_complete_is_true_only_after_the_body_is_read_to_the_end(servers)
     finished = _records(servers)[-1]
     assert finished["stream_complete"] is True
     assert finished["usage"], "a complete stream should also have yielded usage"
+
+
+def test_an_abort_before_message_start_leaves_no_usage(servers):
+    """The shape that motivated #18: 3.74s total, first byte at 3.737s, no
+    usage, and nothing else wrong. It is the health gate's "client aborted"
+    branch — and the branch was only ever exercised on synthetic records.
+
+    Racing a real client against a fast upstream cannot produce it reliably, so
+    the fake upstream stalls before its first event instead. Deterministic.
+    """
+    async def run():
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            async with c.stream("POST", f"{PROXY}/v1/messages",
+                                json={**BODY, "model": "slow-start"}) as r:
+                assert r.status_code == 200
+                # leave immediately, before upstream has sent anything
+        return None
+
+    before = len(_records(servers))
+    asyncio.run(run())
+    time.sleep(0.6)
+    records = _records(servers)
+    assert len(records) == before + 1, "an early abort vanished from the ledger"
+    early = records[-1]
+    assert early["usage"] is None, "nothing was parsed, so there is no usage"
+    assert early["stream_complete"] is False
+    assert early["error"] is None, "an abandoned stream is not an instrument failure"
+
+    # And the gate must read that shape the way it was designed to: tolerated as
+    # a client walking away, never as the ledger losing data. Both sides of #18
+    # in one assertion — the proxy producing the shape and the gate classifying
+    # it — which is what "tests for both sides" was asking for.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "capture_health", ROOT / "scripts" / "capture_health.py")
+    health = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(health)
+    ok, bad, _ = health.check([early])
+    assert not any("ledger failure" in line for line in bad), bad
+    assert any("client-aborted" in line for line in ok + bad), (ok, bad)

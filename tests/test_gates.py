@@ -144,6 +144,37 @@ def test_verified_entries_carry_a_real_source_and_real_numbers():
             assert rate.input_uncached == 0, f"{key}: unverified but carries numbers"
 
 
+# A local judgement, not a documented limit: prices change rarely but they do
+# change — Claude Sonnet 5's input price moved from $3 to $2 between this
+# skill's cached table and the live page, and a `verified: true` stamped before
+# that would still read as current today. 180 days is set where a stale rate
+# starts being more likely than not to have drifted.
+RATE_STALE_AFTER_DAYS = 180
+
+
+def test_a_verified_rate_goes_stale_instead_of_staying_true_forever():
+    """`Rate.age_days` existed and nothing called it, so a rate verified once
+    was verified permanently. A gate that quietly stops working with time is
+    not a gate."""
+    stale = [f"{key} ({rate.age_days()}d, {rate.retrieved_at})"
+             for key, rate in load_rates().items()
+             if rate.verified and rate.age_days() > RATE_STALE_AFTER_DAYS]
+    assert not stale, (
+        f"verified rates older than {RATE_STALE_AFTER_DAYS} days: {stale}. "
+        "Re-read the official pricing page and update retrieved_at, or set "
+        "verified back to false."
+    )
+
+
+def test_the_staleness_check_can_actually_fail():
+    """Asserting on the shipped table alone would pass forever while the table
+    is fresh, including if age_days were wired up wrong."""
+    old = Rate(input_uncached=5.0, cache_read=0.5, cache_write_5m=6.25,
+               cache_write_1h=10.0, output=25.0, source="https://example.test",
+               retrieved_at="2020-01-01", verified=True)
+    assert old.age_days() > RATE_STALE_AFTER_DAYS
+
+
 # --- export gate ------------------------------------------------------------
 
 def test_unclassified_field_fails_closed():

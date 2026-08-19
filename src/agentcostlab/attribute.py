@@ -314,6 +314,43 @@ def _messages_breakpoint_end(messages: object) -> int | None:
     return last
 
 
+def _cache_directives(component: str, value: object) -> frozenset[str]:
+    """The set of distinct ``cache_control`` values a segment asks for.
+
+    ``ttl`` selects which cache the lookup goes to, so changing it moves the
+    write to a different bucket and the previous turn's tail is not found.
+    Observed once on real traffic (capture-02 record 61, 2026-08-19): Claude
+    Code dropped ``ttl: "1h"`` from every marker in one request, 2,822 tokens
+    had to be paid for again, and the official diagnostics could only say
+    ``unavailable``.
+
+    A **set**, deliberately, so this stays orthogonal to position and count:
+
+    *   `_normalise_content` strips the marker from message text blocks because
+        Claude Code walks the breakpoint down the conversation every turn and
+        treating each move as a change produced 25 false reports (#21). That
+        evidence is about *where* the marker sits.
+    *   What it says is a different matter, and is what this compares.
+    *   Adding a marker whose value is already in use changes neither the set
+        nor which buckets are consulted. Neither capture contains a single
+        marker-count change, so there is no evidence for a count rule and this
+        does not invent one.
+    """
+    blocks: list[object] = []
+    if component == "messages" and isinstance(value, list):
+        for message in value:
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list):
+                blocks.extend(content)
+    elif isinstance(value, list):
+        blocks = list(value)
+    return frozenset(
+        serialise(block["cache_control"]).decode()
+        for block in blocks
+        if isinstance(block, dict) and isinstance(block.get("cache_control"), dict)
+    )
+
+
 def _cache_breakpoint(segments: dict[str, object]) -> tuple[str, int] | None:
     """(component, byte offset within it) of the end of the last
     ``cache_control``-bearing block, walking :data:`CACHE_LAYOUT`, or ``None``.
@@ -391,6 +428,32 @@ def attribute(
         prev_bytes = _dump(prev_norm)
         curr_bytes = _dump(curr_norm)
         if prev_bytes == curr_bytes:
+            # Equal bytes is not equal directives: `cache_control` was stripped
+            # out of message text blocks on the way here, so a ttl change inside
+            # `messages` survives normalisation invisibly. It broke the cache the
+            # one time it was observed, and `system` only caught that because
+            # nothing strips the marker there.
+            prev_cc = _cache_directives(component, prev_value)
+            curr_cc = _cache_directives(component, curr_value)
+            # Compared only when both sides declare something. A marker
+            # vanishing with nothing in its place is a different question —
+            # whether an uncached request still reads a previously written
+            # prefix — and neither capture contains one instance of it
+            # (marker counts never change across 111 pairs). #21 settled that
+            # case in the other direction on its own evidence, and overturning
+            # it here would be asserting a rule this repo cannot support.
+            if prev_cc and curr_cc and prev_cc != curr_cc:
+                return Divergence(
+                    component=component,
+                    detail=f"cache_control changed: {sorted(prev_cc)} -> {sorted(curr_cc)}",
+                    path=[component, "cache_control"],
+                    bytes_before=offset,
+                    bytes_after=total - offset,
+                    # Never suppressed. The marker *is* the breakpoint, so a
+                    # change to it moves the write bucket rather than editing an
+                    # uncached tail; "after the breakpoint" does not apply.
+                    suppressed=False,
+                )
             offset += len(curr_bytes)
             continue
         if component == "messages" and _is_append(prev_value, curr_value):

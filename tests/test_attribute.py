@@ -474,3 +474,125 @@ def test_multi_component_breakpoints_under_every_order():
     sys_curr = json.loads(json.dumps(prev))
     sys_curr["system"][0]["text"] = "You are Claude Code (edited)."
     _assert_break_under_all_orders(prev, sys_curr, "system")
+
+
+# --- cache_control directives (#34) ------------------------------------------
+
+CC_1H = {"cache_control": {"type": "ephemeral", "ttl": "1h"}}
+CC_DEFAULT = {"cache_control": {"type": "ephemeral"}}
+
+
+def _directive_body(*marks):
+    """Three text blocks in one message; `marks` places a marker on some of them."""
+    blocks = [{"type": "text", "text": t} for t in ("a", "b", "c")]
+    for index, marker in marks:
+        blocks[index] = {**blocks[index], **marker}
+    return {"model": "m", "system": [{"type": "text", "text": "S"}], "tools": [],
+            "messages": [{"role": "user", "content": blocks},
+                         {"role": "user", "content": [{"type": "text", "text": "tail"}]}],
+            "max_tokens": 10}
+
+
+def test_a_ttl_change_inside_messages_is_a_break():
+    """`_normalise_content` strips `cache_control` from text blocks, so this
+    change survived normalisation invisibly. It was caught on real traffic only
+    because Claude Code changed `system` in the same request, and nothing
+    strips the marker there."""
+    _assert_break_under_all_orders(
+        _directive_body((0, CC_1H)), _directive_body((0, CC_DEFAULT)), "messages")
+
+
+def test_moving_the_marker_is_still_not_a_break():
+    """What #21 fixed. Claude Code walks the breakpoint down the conversation
+    every turn; treating each move as a change produced 25 false reports."""
+    for prev, curr in (
+        (_directive_body((0, CC_1H)), _directive_body((1, CC_1H))),
+        (_directive_body((0, CC_1H)), _directive_body((0, CC_1H), (1, CC_1H))),
+    ):
+        for order in ALL_ORDERS:
+            assert attribute(prev, curr, order=order) is None, order
+
+
+def test_any_directive_field_counts_not_just_ttl():
+    """Compared structurally, so a directive Anthropic adds later is caught
+    without another edit here."""
+    _assert_break_under_all_orders(
+        _directive_body((0, {"cache_control": {"type": "ephemeral", "beta_knob": 1}})),
+        _directive_body((0, {"cache_control": {"type": "ephemeral", "beta_knob": 2}})),
+        "messages")
+
+
+def test_the_real_partial_break_is_attributed():
+    """capture-02 record 61, 2026-08-19 — the project's first observed cache
+    break. Claude Code dropped `ttl: "1h"` from every marker in one request;
+    2,822 tokens were paid for twice and the official diagnostics could only
+    answer `unavailable`.
+
+    Read from the capture rather than copied into a fixture: a hand-copied pair
+    is a fixture that merely resembles the event.
+    """
+    capture = Path(__file__).resolve().parents[1] / "data" / "raw" / "capture-02.jsonl"
+    if not capture.exists():
+        pytest.skip(f"capture-02 not present at {capture}; nothing to assert")
+    rows = [json.loads(line) for line in capture.read_text().splitlines() if line.strip()]
+    by_id = {r["response_id"]: r for r in rows if r.get("response_id")}
+
+    broke = []
+    for curr in rows:
+        prev = by_id.get(curr.get("injected_previous_message_id"))
+        usage, prev_usage = curr.get("usage"), (prev or {}).get("usage")
+        if not usage or not prev_usage:
+            continue
+        expected = (prev_usage.get("cache_read_input_tokens", 0)
+                    + prev_usage.get("cache_creation_input_tokens", 0))
+        if usage.get("cache_read_input_tokens", 0) != expected:
+            broke.append((prev, curr))
+
+    assert len(broke) == 1, f"expected exactly the one known break, found {len(broke)}"
+    prev, curr = broke[0]
+    for order in ALL_ORDERS:
+        d = attribute(prev["request_body"], curr["request_body"], order=order)
+        assert d is not None and not d.suppressed, f"the one real break was missed under {order}"
+
+
+def test_neither_capture_gains_a_false_break():
+    """The rule must not buy the break it catches with reports the ledger
+    contradicts. 111 pairs across both captures."""
+    root = Path(__file__).resolve().parents[1] / "data" / "raw"
+    checked = 0
+    for name in ("capture.jsonl", "capture-02.jsonl"):
+        path = root / name
+        if not path.exists():
+            continue
+        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        by_id = {r["response_id"]: r for r in rows if r.get("response_id")}
+        for curr in rows:
+            prev = by_id.get(curr.get("injected_previous_message_id"))
+            usage, prev_usage = curr.get("usage"), (prev or {}).get("usage")
+            if not usage or not prev_usage:
+                continue
+            checked += 1
+            expected = (prev_usage.get("cache_read_input_tokens", 0)
+                        + prev_usage.get("cache_creation_input_tokens", 0))
+            ledger_broke = usage.get("cache_read_input_tokens", 0) != expected
+            d = attribute(prev["request_body"], curr["request_body"])
+            assert (d is not None and not d.suppressed) == ledger_broke, \
+                f"{name}: attributor and ledger disagree"
+    if not checked:
+        pytest.skip("no captures present")
+
+
+def test_a_marker_vanishing_entirely_is_left_where_21_put_it():
+    """Deliberately NOT a break, and not because it is known to be safe.
+
+    Both sides must declare a directive before they are compared. A request
+    that declares none is a different question — whether it still reads a
+    previously written prefix — and neither capture contains a single instance:
+    marker counts never change across 111 pairs. #21 decided this case on its
+    own evidence, and #34 has none that would overturn it.
+    """
+    with_marker = _directive_body((0, CC_1H))
+    without = _directive_body()
+    for order in ALL_ORDERS:
+        assert attribute(with_marker, without, order=order) is None, order
+        assert attribute(without, with_marker, order=order) is None, order

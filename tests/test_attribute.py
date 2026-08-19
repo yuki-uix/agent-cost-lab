@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from agentcostlab.ledger import broke_cache
 from agentcostlab.attribute import (
     COMPONENTS,
     Divergence,
@@ -439,7 +440,12 @@ def test_suppression_is_order_invariant_on_real_capture():
         pytest.skip(f"real capture not present at {capture}; nothing to assert")
     cal = _load_calibrate()
     rows = cal.load_records(capture)
-    pairs = [(p, c) for p, c in cal.pair_by_previous(rows) if cal.official_signal(c) is not None]
+    # Filtered on the ledger being readable, which is what this test needs.
+    # `official_signal` used to serve as that filter and no longer exists: #35
+    # split it into a ledger verdict and an official component, because folding
+    # them together scored "the API cannot tell you" as "nothing changed".
+    pairs = [(p, c) for p, c in cal.pair_by_previous(rows)
+             if cal.ledger_broke(p, c) is not None]
     assert pairs, "capture present but holds no comparable pairs"
 
     for prev, curr in pairs:
@@ -543,9 +549,7 @@ def test_the_real_partial_break_is_attributed():
         usage, prev_usage = curr.get("usage"), (prev or {}).get("usage")
         if not usage or not prev_usage:
             continue
-        expected = (prev_usage.get("cache_read_input_tokens", 0)
-                    + prev_usage.get("cache_creation_input_tokens", 0))
-        if usage.get("cache_read_input_tokens", 0) != expected:
+        if broke_cache(prev, curr):
             broke.append((prev, curr))
 
     assert len(broke) == 1, f"expected exactly the one known break, found {len(broke)}"
@@ -572,9 +576,7 @@ def test_neither_capture_gains_a_false_break():
             if not usage or not prev_usage:
                 continue
             checked += 1
-            expected = (prev_usage.get("cache_read_input_tokens", 0)
-                        + prev_usage.get("cache_creation_input_tokens", 0))
-            ledger_broke = usage.get("cache_read_input_tokens", 0) != expected
+            ledger_broke = broke_cache(prev, curr)
             d = attribute(prev["request_body"], curr["request_body"])
             assert (d is not None and not d.suppressed) == ledger_broke, \
                 f"{name}: attributor and ledger disagree"

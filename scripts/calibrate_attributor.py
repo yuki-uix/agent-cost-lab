@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from agentcostlab.ledger import broke_cache as ledger_broke  # noqa: E402
 from agentcostlab.attribute import (  # noqa: E402
     COMPONENTS,
     attribute,
@@ -82,27 +83,62 @@ def pair_by_previous(records: list[dict]) -> list[tuple[dict, dict]]:
     return pairs
 
 
-def official_signal(curr: dict) -> str | None:
-    """"no_divergence", a ``*_changed`` component, or None (no usable signal)."""
-    diagnostics = curr.get("diagnostics")
-    if diagnostics:
-        reason = diagnostics.get("cache_miss_reason")
-        if reason and reason.get("type"):
-            return reason["type"]
-        if reason is not None:
-            return "pending"  # cache_miss_reason present but null
-        # diagnostics present without a miss reason: cache was hit.
-        return "no_divergence"
+INCONCLUSIVE = ("unavailable", "previous_message_not_found")
 
-    usage = curr.get("usage") or {}
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
-    input_tokens = usage.get("input_tokens", 0)
-    if cache_read == 0 and cache_creation == 0 and input_tokens == 0:
-        # No usage recorded (e.g. a request that errored before billing): the
-        # pair carries no ground truth, so it is not comparable.
+
+def official_component(curr: dict) -> str | None:
+    """The component Anthropic blames, or ``None`` when it did not name one.
+
+    ``unavailable`` and ``previous_message_not_found`` mean *the API could not
+    determine a reason*. Mapping them through ``OFFICIAL_TO_COMPONENT`` yielded
+    ``None`` — the same value that means "nothing changed" — so a verdict
+    meaning "I cannot tell you" was scored as one meaning "no divergence", and
+    the attributor's correct answer on capture-02 record 61 was charged against
+    it as an over-report. They are excluded now, not counted as negatives.
+    """
+    diagnostics = curr.get("diagnostics")
+    if not isinstance(diagnostics, dict):
         return None
-    return "no_divergence" if cache_read > 0 else "messages_changed"
+    reason = diagnostics.get("cache_miss_reason")
+    if not isinstance(reason, dict):
+        return None
+    return OFFICIAL_TO_COMPONENT.get(reason.get("type"))
+
+
+def official_status(curr: dict) -> str:
+    """``conclusive`` / ``inconclusive`` / ``clean`` / ``absent`` / ``unrecorded``.
+
+    ``unrecorded`` and ``absent`` are kept apart deliberately. A record from
+    before proxy.py grew `diagnostics_present` cannot say whether upstream
+    returned the key; a record with it set to False says upstream did not. The
+    first version of this function collapsed them, which is the same "unknown
+    folded into no" that #25 added the field to prevent and #26 reports as
+    UNDECIDABLE. All 63 pairs of the 2026-08-18 capture landed in `absent`,
+    reading as "Anthropic sent nothing" when the truth is "the proxy did not
+    record it yet".
+    """
+    present = curr.get("diagnostics_present")
+    diagnostics = curr.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        if present is None:
+            return "unrecorded"
+        return "clean" if present else "absent"
+    reason = diagnostics.get("cache_miss_reason")
+    if not isinstance(reason, dict):
+        return "inconclusive"
+    kind = reason.get("type")
+    return "inconclusive" if kind in INCONCLUSIVE else "conclusive"
+
+
+def _refuse_single_class(label: str, buckets: Counter) -> bool:
+    """Print a refusal instead of a rate a constant would match. True if refused."""
+    if len(buckets) >= 2:
+        return False
+    only, n = next(iter(buckets.items()))
+    print(f"  DEGENERATE GROUND TRUTH — no {label} rate reported.")
+    print(f"    all {n} comparable pairs are `{only}`;"
+          f" a constant-`{only}` answer scores {n}/{n} = 100.0%.")
+    return True
 
 
 def main() -> None:
@@ -119,144 +155,108 @@ def main() -> None:
         sys.exit(1)
 
     records = load_records(path)
-    pairs = [(p, c, official_signal(c)) for p, c in pair_by_previous(records)]
+    pairs = pair_by_previous(records)
+    status = Counter(official_status(c) for _, c in pairs)
 
-    has_miss_reason = any(r.get("diagnostics") for r in records)
-    signal_name = (
-        "diagnostics.cache_miss_reason.type"
-        if has_miss_reason
-        else "usage.cache_read_input_tokens > 0"
-    )
-
-    comparable = [(p, c, s) for p, c, s in pairs if s is not None]
-    from_official = sum(1 for _, c, _ in comparable if c.get("diagnostics"))
-    buckets = Counter(s for *_, s in comparable)
     print(f"records: {len(records)}   pairs (by injected_previous_message_id): {len(pairs)}")
-    print(f"official signal: {signal_name}")
-    print(f"comparable pairs (signal present): {len(comparable)}")
-    print(f"  from official diagnostics: {from_official}"
-          f"   from the usage fallback: {len(comparable) - from_official}")
-    print("signal buckets:")
-    for bucket, n in buckets.most_common():
-        print(f"  {bucket:26s} {n}")
+    print("official diagnostics on those pairs:")
+    for kind in ("conclusive", "inconclusive", "clean", "absent", "unrecorded"):
+        if status[kind]:
+            print(f"  {kind:14s} {status[kind]}")
     print()
 
-    # A ground truth with one class cannot rank anything. On the 2026-08-18
-    # capture every comparable pair is "no_divergence", so a function that
-    # always answers "did not break" scores 100% — and that number was reported
-    # as the attributor's agreement rate. Refuse to print a rate rather than
-    # print one that a constant would match.
-    if len(buckets) < 2:
-        only, n = next(iter(buckets.items()))
-        print("DEGENERATE GROUND TRUTH — no agreement rate reported.")
-        print(f"  all {n} comparable pairs are `{only}`.")
-        print("  a constant-`{}` attributor scores {}/{} = 100.0% against this,"
-              .format(only, n, n))
-        print("  so any rate computed here measures nothing about the attributor.")
-        if not from_official:
-            print("  none of it came from official diagnostics: this capture has 0"
-                  " verdicts.")
-        print("\nWhat this capture CAN show, run under the default order:")
-        d = Counter()
-        for prev, curr, _ in comparable:
-            mine = attribute(prev["request_body"], curr["request_body"])
-            d["no divergence" if mine is None
-              else "suppressed (cache intact)" if mine.suppressed
-              else f"reported break: {mine.component}"] += 1
-        for k, v in d.most_common():
-            print(f"  {v:>4}  {k}")
-        print("\nTo calibrate against `cache_miss_reason`, capture a session in"
-              " which the cache")
-        print("actually breaks: switch model, /compact, add or remove an MCP"
-              " server, edit the")
-        print("system prompt, or idle past the cache TTL.")
+    # Two different ground truths, two different questions. Collapsing them is
+    # what produced the mis-scored pair: the ledger knows WHETHER the cache
+    # broke on every pair, the official reason knows WHICH component — and only
+    # when it names one.
+
+    print("=== did the cache break?  (ground truth: the usage ledger) ===")
+    ledger = [(p, c, b) for p, c in pairs if (b := ledger_broke(p, c)) is not None]
+    print(f"  comparable pairs: {len(ledger)}")
+    if not ledger:
+        print("  no pair carries usage on both sides; nothing to compare.")
+    else:
+        buckets = Counter("break" if b else "no break" for *_, b in ledger)
+        for k, v in buckets.most_common():
+            print(f"    {k:10s} {v}")
+        if not _refuse_single_class("break/no-break", buckets):
+            agree = wrong = 0
+            misses = []
+            for prev, curr, broke in ledger:
+                d = attribute(prev["request_body"], curr["request_body"])
+                mine = d is not None and not d.suppressed
+                if mine == broke:
+                    agree += 1
+                else:
+                    wrong += 1
+                    misses.append((prev, curr, broke, d))
+            # Per class, never blended. 49/49 on 48 no-breaks and one break is
+            # a number the majority class wrote; quoting it as "100% accurate"
+            # is the metric error this repo exists to correct, and one already
+            # made once here.
+            hits = Counter()
+            for prev, curr, broke in ledger:
+                d = attribute(prev["request_body"], curr["request_body"])
+                if (d is not None and not d.suppressed) == broke:
+                    hits["break" if broke else "no break"] += 1
+            for cls in ("break", "no break"):
+                total = buckets[cls]
+                if not total:
+                    continue
+                print(f"  {cls:9s} {hits[cls]}/{total} = {hits[cls]/total:.1%}"
+                      + (f"   <- n={total}, not a rate" if total <= 5 else ""))
+
+            # Order must not move this. #24 made suppression independent of the
+            # segment order; asserting it here keeps that honest on real data.
+            moved = [perm for perm in itertools.permutations(COMPONENTS)
+                     if any((lambda d: d is not None and not d.suppressed)(
+                         attribute(p["request_body"], c["request_body"], order=perm)) != b
+                         for p, c, b in ledger)]
+            print(f"  segment orders that change this verdict: {len(moved)} of 120"
+                  + ("" if not moved else "   <- suppression is order-dependent again"))
+            for prev, curr, broke, d in misses[:5]:
+                print(f"    MISS {prev.get('response_id')} -> {curr.get('response_id')}"
+                      f"  ledger={'break' if broke else 'no break'}"
+                      f"  mine={'break' if d and not d.suppressed else 'no break'}")
+            if wrong == 0:
+                print("  NOTE: nothing disagreed. Per the standing rule that is"
+                      " grounds for auditing")
+                print("        this script for special-casing, not for"
+                      " celebrating the numbers.")
+    print()
+
+    print("=== which component?  (ground truth: official cache_miss_reason) ===")
+    conclusive = [(p, c, official_component(c)) for p, c in pairs
+                  if official_status(c) == "conclusive"]
+    if not conclusive:
+        print(f"  0 conclusive verdicts"
+              + (f" ({status['inconclusive']} inconclusive, excluded rather than"
+                 " scored as negatives)" if status["inconclusive"] else "")
+              + " — nothing to compare.")
+        print("  Needs a capture where the API names a reason: switch model,")
+        print("  /compact, add or remove an MCP server, or edit the system prompt.")
         return
 
     results = []
     for perm in itertools.permutations(COMPONENTS):
         agree = disagree = 0
-        for prev, curr, signal in comparable:
-            official = None if signal == "no_divergence" else OFFICIAL_TO_COMPONENT.get(signal)
-            mine = attribute(prev["request_body"], curr["request_body"], order=perm)
-            mine_comp = None if (mine is None or mine.suppressed) else mine.component
-            if mine_comp == official:
-                agree += 1
-            else:
-                disagree += 1
-        total = agree + disagree
-        rate = agree / total if total else float("nan")
-        results.append((rate, agree, disagree, total, perm))
-
-    results.sort(key=lambda r: (-r[0], r[1], r[2]))
-    distinct = {r[0] for r in results}
-    if len(distinct) == 1:
-        rate, agree, disagree, total, perm = results[0]
-        print(f"agreement rate: {rate:.1%}  ({agree}/{total})  (all {len(results)} "
-              f"segment orders tie — suppression is decided in cache-layout order)")
-        best_perm = perm
-        best_disagree = disagree
+        for prev, curr, official in conclusive:
+            d = attribute(prev["request_body"], curr["request_body"], order=perm)
+            mine = None if (d is None or d.suppressed) else d.component
+            agree, disagree = (agree + 1, disagree) if mine == official else (agree, disagree + 1)
+        results.append((agree / (agree + disagree), agree, disagree, perm))
+    results.sort(key=lambda r: (-r[0], r[1]))
+    print(f"  comparable pairs: {len(conclusive)}")
+    if len({r[0] for r in results}) == 1:
+        rate, agree, _, _ = results[0]
+        print(f"  agreement: {agree}/{len(conclusive)} = {rate:.1%}"
+              f"  (all 120 segment orders tie)")
     else:
-        print("segment-order agreement rate (comparable pairs only):")
-        for rate, agree, disagree, total, perm in results:
-            print(f"  {rate:6.1%}  ({agree}/{total})  {' → '.join(perm)}")
-        print()
-        best_rate, best_agree, best_disagree, best_total, best_perm = results[0]
-        print(f"best order: {' → '.join(best_perm)}   "
-              f"agreement {best_rate:.1%} ({best_agree}/{best_total})")
-        print()
-
-    suppressed = 0
-    for prev, curr, _ in comparable:
-        mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
-        if mine is not None and mine.suppressed:
-            suppressed += 1
-    print(f"suppressed (text diverged after the last cache_control block, cache intact): "
-          f"{suppressed}")
-    print()
-
-    # Disagreement breakdown: what did we report that the cache signal did not,
-    # and vice versa? (On a full tie every order disagrees identically, so the
-    # choice below is immaterial.)
-    print("disagreement breakdown:")
-    if best_disagree == 0:
-        print("  none")
-    else:
-        disagree_rows = []
-        for prev, curr, signal in comparable:
-            official = None if signal == "no_divergence" else OFFICIAL_TO_COMPONENT.get(signal)
-            mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
-            mine_comp = None if (mine is None or mine.suppressed) else mine.component
-            if mine_comp == official:
-                continue
-            diverged = set(diverging_components(prev["request_body"], curr["request_body"]))
-            if mine_comp is None:
-                kind = "missed"
-            elif official is None:
-                kind = "over-reported"
-            elif official in diverged and mine_comp in diverged:
-                kind = "both changed"
-            elif official in diverged:
-                kind = "official-early-only"
-            else:
-                kind = "mismatch"
-            disagree_rows.append((prev, curr, official, mine_comp, sorted(diverged), kind))
-
-        for kind, n in Counter(r[5] for r in disagree_rows).most_common():
-            print(f"  {kind:20s} {n}")
-        print()
-        for prev, curr, official, mine_comp, diverged, kind in disagree_rows:
-            prev_id = prev.get("response_id", "?")[:12]
-            print(f"  {prev_id} → {curr.get('response_id', '?')[:12]:12s} "
-                  f"official={official!s:10s} mine={mine_comp!s:10s} "
-                  f"diverged={diverged}  [{kind}]")
-        print()
-
-    if args.verbose:
-        print("per-pair detail (best order):")
-        for prev, curr, signal in comparable:
-            mine = attribute(prev["request_body"], curr["request_body"], order=best_perm)
-            print(f"  {prev.get('response_id', '?')[:12]:12s} → "
-                  f"{curr.get('response_id', '?')[:12]:12s}  {signal:22s}  mine={mine!s}")
+        print("  agreement by segment order:")
+        for rate, agree, _, perm in results:
+            print(f"    {rate:6.1%}  ({agree}/{len(conclusive)})  {' -> '.join(perm)}")
+        print("  NOTE: the orders differ, so this ranks a hypothesis on the same")
+        print("        data it is scored against. Report the spread, not the best.")
 
 
 if __name__ == "__main__":

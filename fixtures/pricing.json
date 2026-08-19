@@ -1,28 +1,42 @@
 {
   "_README": "USD per million tokens. Fill each entry from the OFFICIAL pricing page, set retrieved_at, then flip verified to true. cost() refuses to run on verified:false. Do not copy rates out of blog posts — that is exactly the second-hand-number problem this repo is about.",
+  "_CACHE_WRITE_TIERS": "Anthropic bills two cache-write prices: 1.25x base input for the 5-minute TTL, 2x for the 1-hour one, and 0.1x for a read. Providers with automatic caching and no TTL concept set both write fields to the same number (0 where there is no write charge at all).",
 
   "anthropic/claude-opus-5": {
-    "input_uncached": 0.0,
-    "cache_read": 0.0,
-    "cache_write": 0.0,
-    "output": 0.0,
-    "source": "TODO https://www.anthropic.com/pricing",
-    "retrieved_at": "2026-08-17",
-    "verified": false
+    "input_uncached": 5.0,
+    "cache_read": 0.50,
+    "cache_write_5m": 6.25,
+    "cache_write_1h": 10.0,
+    "output": 25.0,
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing (model pricing table; cross-checked against the prompt-caching multipliers 1.25x / 2x / 0.1x on the same page)",
+    "retrieved_at": "2026-08-19",
+    "verified": true
+  },
+  "anthropic/claude-sonnet-5": {
+    "input_uncached": 2.0,
+    "cache_read": 0.20,
+    "cache_write_5m": 2.50,
+    "cache_write_1h": 4.0,
+    "output": 10.0,
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing — the page notes the $2/$10 launch pricing is now standard and the increase to $3/$15 will not occur",
+    "retrieved_at": "2026-08-19",
+    "verified": true
   },
   "anthropic/claude-haiku-4-5": {
-    "input_uncached": 0.0,
-    "cache_read": 0.0,
-    "cache_write": 0.0,
-    "output": 0.0,
-    "source": "TODO https://www.anthropic.com/pricing",
-    "retrieved_at": "2026-08-17",
-    "verified": false
+    "input_uncached": 1.0,
+    "cache_read": 0.10,
+    "cache_write_5m": 1.25,
+    "cache_write_1h": 2.0,
+    "output": 5.0,
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing (model pricing table)",
+    "retrieved_at": "2026-08-19",
+    "verified": true
   },
   "deepseek/deepseek-chat": {
     "input_uncached": 0.0,
     "cache_read": 0.0,
-    "cache_write": 0.0,
+    "cache_write_5m": 0.0,
+    "cache_write_1h": 0.0,
     "output": 0.0,
     "source": "TODO https://api-docs.deepseek.com/quick_start/pricing",
     "retrieved_at": "2026-08-17",
@@ -31,7 +45,8 @@
   "openai/gpt-5.5": {
     "input_uncached": 0.0,
     "cache_read": 0.0,
-    "cache_write": 0.0,
+    "cache_write_5m": 0.0,
+    "cache_write_1h": 0.0,
     "output": 0.0,
     "source": "TODO https://openai.com/api/pricing/",
     "retrieved_at": "2026-08-17",

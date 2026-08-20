@@ -133,8 +133,8 @@ estimate.
 
 | # | Question | Predicted | Actual | Verdict |
 |---|---|---|---|---|
-| 3.1 | Turns needed to recover the cold-start cost of one compaction | **2–4 turns** | | |
-| 3.2 | Does that number depend on session length? | Payback in *turns* roughly constant; savings after it scale with how much was cut | | |
+| 3.1 | Turns needed to recover the cold-start cost of one compaction | **2–4 turns** | **18–19** (capture-03, Opus 5, n=1) | WRONG |
+| 3.2 | Does that number depend on session length? | Payback in *turns* roughly constant; savings after it scale with how much was cut | one compaction observed; two session lengths needed | not yet answerable |
 
 **Reasoning**
 
@@ -321,6 +321,19 @@ changes the shape.
 **1.2 was off by its whole range** — predicted 10–20% of turns diverging,
 measured zero in 63. One session is not a rate; what it does establish is that a
 well-behaved Claude Code session can run 46 turns with an unbroken prefix.
+
+**3.1 was wrong by 5x, and the arithmetic was not the problem.** Replaying the
+reasoning above with measured inputs one at a time: the real context (93,656)
+leaves it at 2.8 turns; the real cut (**24%**, not the assumed 75%) sends it to
+36; the fact that 69% of the post-compaction prefix was **still cached** — never
+a cold start — pulls it back to 10.4; the real write tier (**1h at 2x**, not 5m
+at 1.25x) pushes it to 17.8, against 18–19 measured turn by turn. Three wrong
+inputs, partially cancelling, with the compaction ratio dominating.
+
+**Compaction saves on the cheapest line item.** Cached reads already cost 0.1x,
+so removing 22,186 tokens saved $0.0111 a turn, while the rewrite was billed at
+2x. It pays the list price to save a discounted one. That is the shape of the
+result, and it is why the payback is long rather than a matter of a few turns.
 
 **1.1 has no samples.** With zero divergences there is no distribution to report.
 Answering it needs captures containing compaction, MCP changes, or long idle

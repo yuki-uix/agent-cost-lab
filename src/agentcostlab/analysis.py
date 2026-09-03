@@ -42,6 +42,15 @@ with no story for why. Folding it into a cause, or dropping it, inflates a
 
 Bytes and tokens are two different quantities this repo has never calibrated
 against each other, so this module reports tokens and dollars and never bytes.
+
+The conservation identity (``broke_cache`` / ``_repaid``) reads Anthropic's raw
+usage keys (``cache_read_input_tokens`` / ``cache_creation_input_tokens``), so
+it is only defined for Anthropic's usage shape. As a temporary limitation this
+module refuses any non-Anthropic record rather than silently misreading a
+DeepSeek / OpenAI payload as "not broken" (both sides would read 0). Making the
+identity itself provider-neutral is a separate task — it lives in ``ledger``
+and its three call sites, so it is deliberately *not* re-derived here, which
+would be a fourth copy of the same rule.
 """
 from __future__ import annotations
 
@@ -53,6 +62,18 @@ from .pricing import Rate, UnverifiedRate, cost, load_rates
 from .providers import Usage, normalise
 
 _PER_MTOK = 1_000_000
+
+
+class RepaidExceedsCapacity(ValueError):
+    """``repaid`` tokens exceed what the turn's non-cache-read buckets carried."""
+
+
+class RecordRateMismatch(ValueError):
+    """A record's provider or model does not match the pricing ``model_key``."""
+
+
+class NonAnthropicProvider(ValueError):
+    """The conservation identity is only defined for Anthropic's usage shape."""
 
 
 @dataclass(frozen=True)
@@ -123,43 +144,120 @@ def _verified_rate(rates: dict[str, Rate], model_key: str) -> Rate:
     return rate
 
 
+def _parse_model_key(model_key: str) -> tuple[str, str]:
+    """Split a pricing key into its provider and model parts.
+
+    ``anthropic/claude-sonnet-5`` -> ``("anthropic", "claude-sonnet-5")``.
+    """
+    provider, _, model = model_key.partition("/")
+    return provider, model
+
+
+def _validate_records(records: list[dict], model_key: str) -> None:
+    """Refuse a capture whose records do not match the pricing ``model_key``.
+
+    One key prices every record, so a mixed-model or mixed-provider capture
+    would be silently billed at the wrong rate, and a mistyped key would price a
+    real capture wrongly with no warning. Every record is checked before any
+    arithmetic, and any mismatch raises rather than skipping the odd record out —
+    skipping would be a quieter kind of under-reporting.
+
+    Also refuses non-Anthropic providers: the conservation identity this module
+    prices from reads Anthropic's usage keys, so a DeepSeek / OpenAI record would
+    read 0 on both sides and a real break would be judged "not broken".
+    """
+    provider_part, model_part = _parse_model_key(model_key)
+    for i, record in enumerate(records):
+        rec_provider = record.get("provider")
+        if rec_provider != provider_part:
+            raise RecordRateMismatch(
+                f"record {i} has provider {rec_provider!r}, which does not match "
+                f"the provider in model_key {model_key!r} ({provider_part!r}); "
+                f"refusing to price a capture under the wrong rate."
+            )
+        body = record.get("request_body") or {}
+        if "model" in body and body["model"] != model_part:
+            raise RecordRateMismatch(
+                f"record {i} has model {body['model']!r} in its request_body, "
+                f"which does not match the model in model_key {model_key!r} "
+                f"({model_part!r}); refusing to price a capture under the wrong "
+                f"rate."
+            )
+        if rec_provider != "anthropic":
+            raise NonAnthropicProvider(
+                f"record {i} is from provider {rec_provider!r}; the cache-break "
+                f"conservation identity (cache_read_input_tokens / "
+                f"cache_creation_input_tokens) is currently only defined for "
+                f"Anthropic's usage shape, so non-Anthropic providers are "
+                f"refused rather than silently misread. Making the identity "
+                f"provider-neutral is a separate task touching ledger and its "
+                f"three call sites."
+            )
+
+
 def _loss_interval(
     repaid: int, usage: Usage, rate: Rate, model_key: str, rates: dict[str, Rate]
 ) -> tuple[float, float]:
     """Bounds on the extra cost of ``repaid`` tokens re-billed after a break.
 
-    The re-billed tokens land in one of the non-cache-read buckets, but usage
-    only reports each bucket's total, not the split. Sweep the free parameter:
-    low = every repaid token in the cheapest bucket that actually carried tokens
-    this turn, high = every repaid token in the most expensive one.
+    The re-billed tokens land in one of the non-cache-read buckets, and usage
+    reports each bucket's *total*, not the split. Two constraints fix the sweep:
+
+    *   only buckets that actually carried tokens this turn may take any repaid
+        token — a turn with no 1h write may not use the 2x rate as its bound;
+    *   a bucket can hold at most its own reported token count, so the repaid
+        tokens are packed greedily — most expensive first for ``usd_high``,
+        cheapest first for ``usd_low`` — spilling the remainder into the next
+        bucket in rate order.
+
+    If the buckets' total capacity is less than ``repaid``, those tokens cannot
+    all have been re-billed this turn and the conservation identity's premise is
+    broken: refuse rather than scale, clamp, or guess.
 
     ``cost`` is called first so an unpriceable write (no TTL, tiers differ)
     refuses here exactly as it does everywhere else, rather than silently
-    guessing. The loss is the bucket rate minus the cache-read rate the tokens
-    would have paid had the prefix survived.
+    guessing. The loss per token is the bucket rate minus the cache-read rate
+    the token would have paid had the prefix survived.
     """
     cost(usage, model_key, rates)
-    buckets: list[float] = []
+    buckets: list[tuple[int, float]] = []
     if usage.input_uncached:
-        buckets.append(rate.input_uncached)
+        buckets.append((usage.input_uncached, rate.input_uncached))
     if usage.cache_write_5m:
-        buckets.append(rate.cache_write_5m)
+        buckets.append((usage.cache_write_5m, rate.cache_write_5m))
     if usage.cache_write_1h:
-        buckets.append(rate.cache_write_1h)
+        buckets.append((usage.cache_write_1h, rate.cache_write_1h))
     if usage.cache_write_unspecified:
         # ``cost`` above raises when the tiers differ; reaching here means they
         # are equal, so either tier's rate is the price.
-        buckets.append(rate.cache_write_5m)
-    if not buckets:
-        raise ValueError(
-            f"{repaid} repaid tokens but no non-cache-read bucket in this turn's "
-            f"usage ({usage}) to bill them to; refusing to guess."
+        buckets.append((usage.cache_write_unspecified, rate.cache_write_5m))
+    total_capacity = sum(capacity for capacity, _ in buckets)
+    if total_capacity < repaid:
+        raise RepaidExceedsCapacity(
+            f"{repaid} repaid tokens, but this turn's non-cache-read buckets "
+            f"carried {total_capacity} tokens in total; the conservation "
+            f"identity's premise does not hold, so refusing to scale, clamp, "
+            f"or guess."
         )
-    low, high = min(buckets), max(buckets)
-    return (
-        repaid * (low - rate.cache_read) / _PER_MTOK,
-        repaid * (high - rate.cache_read) / _PER_MTOK,
-    )
+    low = _pack(repaid, sorted(buckets, key=lambda b: b[1]), rate.cache_read)
+    high = _pack(repaid, sorted(buckets, key=lambda b: b[1], reverse=True), rate.cache_read)
+    return low, high
+
+
+def _pack(repaid: int, buckets: list[tuple[int, float]], cache_read_rate: float) -> float:
+    """USD loss of packing ``repaid`` tokens into ``buckets`` in the given order.
+
+    Each bucket takes up to its capacity; the remainder spills into the next.
+    """
+    remaining = repaid
+    subtotal = 0.0
+    for capacity, bucket_rate in buckets:
+        if remaining <= 0:
+            break
+        filled = min(capacity, remaining)
+        subtotal += filled * (bucket_rate - cache_read_rate)
+        remaining -= filled
+    return subtotal / _PER_MTOK
 
 
 def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
@@ -170,6 +268,7 @@ def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
     """
     rates = load_rates()
     rate = _verified_rate(rates, model_key)
+    _validate_records(records, model_key)
 
     cause_state = {c: {"turns": 0, "repaid": 0, "low": 0.0, "high": 0.0}
                    for c in COMPONENTS}

@@ -165,9 +165,13 @@ def test_one_break_is_a_rate_interval_not_a_point_estimate():
 
 def test_diagnose_refuses_unknown_model_with_next_step(rates, tmp_path):
     p = tmp_path / "cap.jsonl"
+    # usage present so the record is measurable and actually reaches rate
+    # resolution — the point of this test is the unknown-model refusal, not the
+    # no-usage guard.
     p.write_text(json.dumps({
         "response_id": "a", "provider": "anthropic",
         "request_body": {"model": "claude-haiku-4-5"},
+        "usage": {"cache_read_input_tokens": 100},
     }) + "\n")
     code, text = cli.run_diagnose(p)
     assert code != 0
@@ -277,3 +281,43 @@ def test_one_break_dollars_reproduce_from_the_displayed_prefix(rates):
     # priced from the very integer that will be displayed, not from 100.5
     assert s["one_break_low"] == n * (rate.input_uncached - rate.cache_read) / 1_000_000
     assert s["one_break_high"] == n * (rate.cache_write_1h - rate.cache_read) / 1_000_000
+
+
+def test_no_measurable_usage_is_a_refusal_not_a_zero_cost_success(rates, tmp_path):
+    """P1: a capture with no usable usage measured nothing. Reporting it as a clean
+    $0.00 run is a zero wearing a success badge — it must refuse with a next step.
+    Covers empty file, missing-usage records, and empty-usage ({}) records."""
+    for name, rows in [
+        ("empty", []),
+        ("missing", [rec("a")]),                          # no usage key
+        ("empty_usage", [rec("a", usage_={})]),           # usage present but empty
+    ]:
+        p = tmp_path / f"{name}.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        code, text = cli.run_diagnose(p)
+        assert code != 0, f"{name}: measured nothing but returned success"
+        assert "Next step" in text, f"{name}: refusal without a next step"
+
+
+def test_a_read_failure_still_gives_a_next_step(tmp_path):
+    """P3: run_diagnose promises 'never just an error'. A corrupt/truncated capture
+    must carry a concrete next step like every other refusal."""
+    p = tmp_path / "corrupt.jsonl"
+    p.write_text("not json at all\n")
+    code, text = cli.run_diagnose(p)
+    assert code != 0
+    assert "Next step" in text
+
+
+def test_a_healthy_zero_break_capture_is_still_a_success(rates, tmp_path):
+    """The guard must not swallow a legitimate zero-cost run: a session that read
+    from cache and simply never broke stays exit 0 with its savings."""
+    rows = [
+        rec("a", usage_=usage(cache_read=0, input_tokens=1000)),
+        rec("b", prev="a", usage_=usage(cache_read=900)),   # a real cache read, no break
+    ]
+    p = tmp_path / "healthy.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    code, text = cli.run_diagnose(p)
+    assert code == 0
+    assert "$" in text

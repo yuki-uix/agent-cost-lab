@@ -239,7 +239,21 @@ def run_diagnose(path: Path) -> tuple[int, str]:
     try:
         rows = _load(path)
     except (OSError, json.JSONDecodeError) as exc:
-        return 1, f"could not read {path}: {exc}\n"
+        return 1, (f"could not read {path}: {exc}\n"
+                   f"Next step: check the file is the JSONL a capture writes "
+                   f"(one JSON object per line); re-record with 'agentcostlab "
+                   f"record' if it is truncated or corrupt.")
+
+    # A $0.00 report is only honest when a session was measured and simply had no
+    # misses (a healthy prefix reads from cache, so hit_usd_saved > 0). A capture
+    # with no usable usage anywhere — empty file, or the proxy never recorded a
+    # usage object — measured nothing, and reporting it as a clean zero-cost run
+    # is a zero wearing a success badge. Refuse instead, with a next step.
+    if not any(row.get("usage") for row in rows):
+        return 1, (f"no measurable usage in {path}\n"
+                   f"Next step: this capture carries no token usage — the proxy "
+                   f"likely did not record response bodies. Re-record with "
+                   f"'agentcostlab record' and confirm 'record status' shows turns.")
 
     try:
         return 0, diagnose_text(rows)

@@ -102,7 +102,12 @@ def _model_stats(records: list[dict], rates) -> list[dict]:
     for model in sorted(reads):
         read_tokens = reads[model]
         rate = rates[f"anthropic/{model}"]
-        typical = _median(prefixes.get(model, []))
+        # A median over an even-sized set is a .5 value. The prefix count shown to
+        # the reader is an integer, and the dollar figures have to be reproducible
+        # from *that* integer — otherwise "median prefix 100 tokens" is priced at
+        # 100.5 and the printed number cannot be rederived. Round once, here, and
+        # price from the same integer that is displayed.
+        typical = int(round(_median(prefixes.get(model, []))))
         # If the prefix broke once, the typical prefix length would be re-billed
         # somewhere other than the read rate. This is a hypothetical break with no
         # real usage bucket to sweep, so it is a pure rate interval — cheapest
@@ -113,7 +118,7 @@ def _model_stats(records: list[dict], rates) -> list[dict]:
             "model": model,
             "read_tokens": read_tokens,
             "saved": saved[model],
-            "typical_prefix": int(typical),
+            "typical_prefix": typical,
             "one_break_low": one_break_low,
             "one_break_high": one_break_high,
         })

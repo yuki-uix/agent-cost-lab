@@ -259,3 +259,21 @@ def test_record_points_capture_sh_at_the_running_interpreter(monkeypatch):
 def test_record_capture_script_is_the_real_one():
     assert cli.CAPTURE_SH.name == "capture.sh"
     assert cli.CAPTURE_SH.exists()
+
+
+def test_one_break_dollars_reproduce_from_the_displayed_prefix(rates):
+    """The printed 'median prefix N tokens' must price out to the printed dollar
+    figure. A median over an even set is a .5 value; if the money is computed from
+    the float while the display is floored, the reader multiplies N by the rate and
+    cannot rederive the number on screen. Two reads, 100 and 101 -> median 100.5."""
+    stats = cli._model_stats(
+        [rec("a", usage_=usage(cache_read=100)),
+         rec("b", usage_=usage(cache_read=101))],
+        SIMPLE,
+    )
+    (s,) = stats
+    n = s["typical_prefix"]
+    rate = SIMPLE["anthropic/claude-sonnet-5"]
+    # priced from the very integer that will be displayed, not from 100.5
+    assert s["one_break_low"] == n * (rate.input_uncached - rate.cache_read) / 1_000_000
+    assert s["one_break_high"] == n * (rate.cache_write_1h - rate.cache_read) / 1_000_000

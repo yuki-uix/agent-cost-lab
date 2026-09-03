@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -142,6 +143,24 @@ def test_per_model_savings_sum_to_cost_by_cause_total(rates):
     assert sum(s["saved"] for s in stats) == pytest.approx(breakdown.hit_usd_saved)
 
 
+def test_one_break_is_a_rate_interval_not_a_point_estimate():
+    """P2-b: a hypothetical break has no real usage bucket, so it is a pure rate
+    interval — cheapest bucket (uncached) to most expensive (1h write) — never a
+    single point. Hand-computed against the real fixture rates for opus."""
+    from agentcostlab.pricing import load_rates as load_real_rates
+
+    records = [rec("a", model="claude-opus-5", usage_=usage(cache_read=1000))]
+    stats = cli._model_stats(records, load_real_rates())
+    opus = next(s for s in stats if s["model"] == "claude-opus-5")
+
+    typical = opus["typical_prefix"]
+    # fixtures/pricing.json opus: input_uncached 5.0, cache_read 0.50,
+    # cache_write_1h 10.0 per MTok.
+    assert opus["one_break_low"] == pytest.approx(typical * (5.0 - 0.50) / 1_000_000)
+    assert opus["one_break_high"] == pytest.approx(typical * (10.0 - 0.50) / 1_000_000)
+    assert opus["one_break_high"] > opus["one_break_low"]
+
+
 # --- exit codes: a capture that cannot be priced is a refusal, not an error --
 
 def test_diagnose_refuses_unknown_model_with_next_step(rates, tmp_path):
@@ -162,6 +181,55 @@ def test_diagnose_missing_capture_is_a_refusal_with_next_step(tmp_path):
     assert "Next step" in text
 
 
+def test_diagnose_refuses_repayment_exceeding_capacity(rates, tmp_path):
+    """P2-a: a turn that re-bills more tokens than its non-cache-read buckets
+    carried breaks the conservation identity; ``run_diagnose`` must turn that
+    into exit 2 + a next step, not a traceback."""
+    records = [
+        rec("a", usage_=prev_usage(1000, 200)),
+        rec("b", prev="a", usage_=usage(cache_read=0, input_tokens=100)),
+    ]
+    p = tmp_path / "cap.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    code, text = cli.run_diagnose(p)
+    assert code == 2
+    assert "refusing to diagnose" in text
+    assert "Next step" in text
+
+
+def test_diagnose_refuses_ambiguous_cache_write(rates, tmp_path):
+    """P2-a: a write with no TTL whose two tiers cost differently cannot be
+    priced; ``run_diagnose`` must return exit 2 + a next step, not raise."""
+    records = [
+        rec("a", usage_=prev_usage(1000, 0)),
+        rec("b", prev="a", usage_={"input_tokens": 0, "cache_read_input_tokens": 0,
+                                    "cache_creation_input_tokens": 500}),
+    ]
+    p = tmp_path / "cap.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    code, text = cli.run_diagnose(p)
+    assert code == 2
+    assert "refusing to diagnose" in text
+    assert "Next step" in text
+
+
+# --- the default capture is the highest-numbered one, never an attempt --------
+
+def test_default_capture_prefers_highest_numbered_and_ignores_attempts(tmp_path, monkeypatch):
+    """P1-a: only ``capture-NN.jsonl`` participates, compared numerically — so
+    ``capture-10`` beats ``capture-2``, and ``capture-attempt*`` never wins."""
+    monkeypatch.setattr(cli, "RAW_DIR", tmp_path)
+    (tmp_path / "capture-02.jsonl").write_text("")
+    (tmp_path / "capture-10.jsonl").write_text("")
+    (tmp_path / "capture-attempt3-prelineagefix.jsonl").write_text("")
+    assert cli._default_capture() == tmp_path / "capture-10.jsonl"
+
+
+def test_default_capture_falls_back_when_no_numbered_capture(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "RAW_DIR", tmp_path)
+    assert cli._default_capture() == tmp_path / "capture.jsonl"
+
+
 # --- record forwards to capture.sh rather than re-implementing it -----------
 
 def test_record_forwards_to_the_capture_script(monkeypatch):
@@ -170,6 +238,22 @@ def test_record_forwards_to_the_capture_script(monkeypatch):
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
     assert cli._cmd_record("status") == 0
     assert calls == [[str(cli.CAPTURE_SH), "status"]]
+
+
+def test_record_points_capture_sh_at_the_running_interpreter(monkeypatch):
+    """P1-b: capture.sh defaults its python to the repo's ``.venv``, but a
+    pip-installed CLI must hand it the interpreter it is actually running under."""
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["env"] = kw["env"]
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert cli._cmd_record("status") == 0
+    assert seen["cmd"] == [str(cli.CAPTURE_SH), "status"]
+    assert seen["env"]["ACL_PYTHON"] == sys.executable
 
 
 def test_record_capture_script_is_the_real_one():

@@ -38,7 +38,7 @@ start)
     fi
     CAPTURE=$(next_file)
     mkdir -p data/raw
-    ACL_CAPTURE="$CAPTURE" nohup .venv/bin/python -m agentcostlab.proxy \
+    ACL_CAPTURE="$CAPTURE" nohup "${ACL_PYTHON:-.venv/bin/python}" -m agentcostlab.proxy \
         >"$LOG" 2>&1 &
     echo $! >"$PIDFILE"
     echo "$CAPTURE" >"$PIDFILE.file"
@@ -69,7 +69,7 @@ status)
         exit 0
     fi
     echo "recording into $CAPTURE — $(count "$CAPTURE") records so far"
-    .venv/bin/python - "$CAPTURE" <<'PY'
+    "${ACL_PYTHON:-.venv/bin/python}" - "$CAPTURE" <<'PY'
 import json, sys, collections
 try:
     rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
@@ -95,7 +95,7 @@ stop)
     echo "stopped."
     [ -z "$CAPTURE" ] && exit 0
     echo
-    .venv/bin/python scripts/capture_health.py "$CAPTURE"
+    "${ACL_PYTHON:-.venv/bin/python}" scripts/capture_health.py "$CAPTURE"
     ;;
 *)
     echo "usage: scripts/capture.sh [start|status|stop]" >&2

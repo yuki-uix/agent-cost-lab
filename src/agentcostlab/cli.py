@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -25,9 +27,10 @@ from .analysis import (
     MissingModel,
     NonAnthropicProvider,
     RecordRateMismatch,
+    RepaidExceedsCapacity,
     cost_by_cause,
 )
-from .pricing import UnverifiedRate, load_rates
+from .pricing import AmbiguousCacheWrite, UnverifiedRate, load_rates
 from .providers import normalise
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -60,9 +63,19 @@ def _median(values: list[int]) -> float:
 
 
 def _default_capture() -> Path:
-    """The capture a bare ``diagnose`` should read: the newest numbered one."""
-    numbered = sorted(RAW_DIR.glob("capture-*.jsonl"))
-    return numbered[-1] if numbered else RAW_DIR / "capture.jsonl"
+    """The capture a bare ``diagnose`` should read: the highest-numbered one.
+
+    Only ``capture-NN.jsonl`` participates, matched on the digits and compared
+    numerically — never lexicographically, and never ``capture-attempt*`` or any
+    other non-numeric suffix (those are named ``failed`` / ``pre-fix`` waste
+    samples that a default diagnose must not silently pick).
+    """
+    numbered = sorted(
+        (int(m.group(1)), p)
+        for p in RAW_DIR.glob("capture-*.jsonl")
+        if (m := re.fullmatch(r"capture-(\d+)\.jsonl", p.name))
+    )
+    return numbered[-1][1] if numbered else RAW_DIR / "capture.jsonl"
 
 
 def _model_stats(records: list[dict], rates) -> list[dict]:
@@ -91,14 +104,18 @@ def _model_stats(records: list[dict], rates) -> list[dict]:
         rate = rates[f"anthropic/{model}"]
         typical = _median(prefixes.get(model, []))
         # If the prefix broke once, the typical prefix length would be re-billed
-        # at the uncached rate instead of the read rate. An estimate, clearly so.
-        one_break = typical * (rate.input_uncached - rate.cache_read) / _PER_MTOK
+        # somewhere other than the read rate. This is a hypothetical break with no
+        # real usage bucket to sweep, so it is a pure rate interval — cheapest
+        # bucket (uncached) to most expensive (1h write) — never a point estimate.
+        one_break_low = typical * (rate.input_uncached - rate.cache_read) / _PER_MTOK
+        one_break_high = typical * (rate.cache_write_1h - rate.cache_read) / _PER_MTOK
         stats.append({
             "model": model,
             "read_tokens": read_tokens,
             "saved": saved[model],
             "typical_prefix": int(typical),
-            "one_break": one_break,
+            "one_break_low": one_break_low,
+            "one_break_high": one_break_high,
         })
     return stats
 
@@ -147,7 +164,7 @@ def diagnose_text(records: list[dict]) -> str:
             f" -> {_usd(s['saved'])} saved"
         )
         lines.append(
-            f"    one break ~ {_usd(s['one_break'])}"
+            f"    one break ~ {_usd(s['one_break_low'])} – {_usd(s['one_break_high'])}"
             f" (median prefix {s['typical_prefix']:,} tokens)"
         )
 
@@ -237,13 +254,30 @@ def run_diagnose(path: Path) -> tuple[int, str]:
         return 2, (f"refusing to diagnose: {exc}\n"
                    f"Next step: check the official pricing page, fill in the numbers, "
                    f"then set verified: true.")
+    except RepaidExceedsCapacity as exc:
+        return 2, (f"refusing to diagnose: {exc}\n"
+                   f"Next step: a turn re-billed more tokens than its own "
+                   f"non-cache-read buckets carried, so the conservation identity's "
+                   f"premise does not hold — usually an instrument anomaly. Check that "
+                   f"turn's usage in this capture.")
+    except AmbiguousCacheWrite as exc:
+        return 2, (f"refusing to diagnose: {exc}\n"
+                   f"Next step: a write arrived without a TTL and the two tiers are "
+                   f"priced differently, so it cannot be priced. Check that capture's "
+                   f"cache_creation breakdown.")
 
 
 def _cmd_record(action: str) -> int:
     if not CAPTURE_SH.exists():
         print(f"capture script not found at {CAPTURE_SH}", file=sys.stderr)
         return 1
-    return subprocess.run([str(CAPTURE_SH), action]).returncode
+    # capture.sh defaults its python to `.venv/bin/python` (its own installed
+    # venv); a pip-installed CLI must point it at the interpreter it is actually
+    # running under, or `record` breaks outside the repo's own checkout.
+    return subprocess.run(
+        [str(CAPTURE_SH), action],
+        env={**os.environ, "ACL_PYTHON": sys.executable},
+    ).returncode
 
 
 def main(argv: list[str] | None = None) -> int:

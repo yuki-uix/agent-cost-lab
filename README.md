@@ -7,8 +7,27 @@ This is a follow-up to [《怎么优化 Coding Agent 的成本》](https://zhenj
 "调研结论，还没有在项目中实际落地". This repo supplies the missing half: the
 measurements, plus what changed in the three months after it was written.
 
-**Status: instrument built, nothing measured yet.** No conclusions below are
-real until the tables in [predictions.md](predictions.md) have an `actual` column.
+**Status (2026-09-03): one result, one blocked experiment, one undecided.**
+A claim is only real once its row in [predictions.md](predictions.md) has an
+`actual` column; the rest of this README describes the rig, not findings.
+
+- **E3 — answered.** A `/compact` pays for itself in **18–19 turns**, not the
+  2–4 that prediction 3.1 was locked on. n=1, and 18–19 is a *lower bound*:
+  [report/05](report/05-e3-compact-payback.md) explains why the true payback can
+  only be longer.
+- **E1 — blocked on data, not analysis.** Across four captures the main one
+  carries **zero** `cache_miss_reason` verdicts, because a healthy agent does not
+  break its own prefix. The attributor has therefore only ever been checked
+  against negatives. Fix in progress: [E4](docs/e4-injection-campaign.md) injects
+  faults with a known cause so there is something positive to check against.
+- **E2 — the question itself is unsettled.** The premise (tools mis-report their
+  own savings) did not survive checking: the claim traced back to the survey
+  rather than to the tool. Whether E2 measures tool overstatement or
+  restatement drift is a decision that has to be made before money is spent —
+  see [report/99](report/99-open-questions.md).
+
+Where this is going, and what would make it a tool rather than a lab:
+[docs/direction.md](docs/direction.md).
 
 ## Why this repo exists
 

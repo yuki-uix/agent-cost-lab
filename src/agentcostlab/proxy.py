@@ -20,6 +20,7 @@ from pathlib import Path
 
 import httpx
 
+from . import inject
 from .codec import serialise
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -147,6 +148,15 @@ async def messages(request: Request):
     if PROVIDER == "anthropic":
         _inject_diagnostics(body, headers, key)
 
+    # E4: a deliberate cache-prefix fault, when one is armed. Must sit exactly
+    # here — after diagnostics threading, so the fault is scheduled against the
+    # same lineage the ledger threads; and before `serialise`, so the
+    # `request_body` recorded below is the body that actually went on the wire.
+    # Injecting after the record was built would leave the attributor diffing a
+    # stream that was never transmitted, which is the failure `codec` exists to
+    # rule out. `None` when nothing is armed. See docs/e4-injection-campaign.md.
+    injection = inject.apply(body, key)
+
     # Ask upstream not to compress. aiter_raw() yields undecoded bytes, so a
     # gzipped stream passes through fine but is unparseable here — the ledger
     # silently loses usage on every call while the client sees nothing wrong.
@@ -162,6 +172,12 @@ async def messages(request: Request):
         "client_bytes": len(raw),
         "request_bytes": len(payload),
         "injected_previous_message_id": LAST_ID.get(key),
+        # Which deliberate fault, if any, was applied to this turn. Present on
+        # every record of an injected run — including the ones where the fault
+        # did not fire (`applied: false`) — so a capture can never be mistaken
+        # for an organic one, and so 4.5's baseline arm is declared rather than
+        # merely unset.
+        "injection": injection,
         "request_body": body,
         "system_prompt": body.get("system"),
         "tool_names": [t.get("name") for t in body.get("tools", [])],

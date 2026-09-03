@@ -36,6 +36,12 @@ POLICIES: dict[str, Policy] = {
     "diagnostics": Policy.KEEP,
     "diagnostics_present": Policy.KEEP,
     "injected_previous_message_id": Policy.KEEP,
+    # E4 campaign label. KEEP, and load-bearing: a redacted capture that lost it
+    # would read as organic traffic, and the baseline arm (prediction 4.5, no
+    # false positives) would be indistinguishable from "nobody armed anything".
+    # The value is this repo's own metadata — fault id, turn number, and a
+    # description written here — so it carries nothing of the user's.
+    "injection": Policy.KEEP,
     "response_id": Policy.KEEP,
     "status_code": Policy.KEEP,
     "stream_complete": Policy.KEEP,

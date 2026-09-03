@@ -89,12 +89,19 @@ def test_every_percentage_line_carries_an_integer_count(rates):
     ]
     text = cli.diagnose_text(records)
 
-    pct = re.compile(r"\d+%")
-    digit = re.compile(r"\d+")
+    # The rule is that each percentage carries *its own* denominator, not that
+    # the line contains a digit somewhere. An earlier version asserted the
+    # latter: stripping "100%" from `ambiguous: 1 turn (100%), 2,822 tokens,
+    # $0.005080` still left plenty of digits, so deleting the count passed.
+    pct = re.compile(r"(\d+)%(?P<tail>.{0,40})")
     assert "%" in text, "the gate must actually exercise a percentage line"
+    found = 0
     for line in text.splitlines():
-        if "%" in line:
-            assert digit.search(pct.sub("", line)), f"bare percentage: {line!r}"
+        for m in pct.finditer(line):
+            found += 1
+            assert re.search(r"of\s+\d+", m.group("tail")), (
+                f"percentage without its denominator: {line!r}")
+    assert found, "no percentage was matched, so nothing was checked"
 
 
 # --- the three tiers are visually distinct; ambiguous is a candidate list ----

@@ -31,7 +31,8 @@ is the oracle the attributor is checked against, so it must not share the
 attributor's reasoning. When they disagree, the disagreement is a fact to
 report, not a loose end to paper over:
 
-*   ledger broke, attributor names a component      -> ``by_cause[component]``, priced
+*   ledger broke, attributor names one component     -> ``by_cause[component]``, priced
+*   ledger broke, ≥2 components diverged             -> ``ambiguous``, priced, candidates listed
 *   ledger broke, attributor returns None/suppressed -> ``unattributed``, priced
 *   ledger intact, attributor reports a divergence   -> ``disputed_turns``, counted only
 *   usage missing on either side                     -> ``not_measured_turns``
@@ -56,7 +57,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .attribute import COMPONENTS, attribute
+from .attribute import COMPONENTS, _canonical_candidates, attribute
 from .ledger import broke_cache
 from .pricing import Rate, UnverifiedRate, cost, load_rates
 from .providers import Usage, normalise
@@ -78,16 +79,18 @@ class NonAnthropicProvider(ValueError):
 
 @dataclass(frozen=True)
 class CauseCost:
-    cause: str              # "system" | "tools" | "messages" | "model" | "params"
+    cause: str              # "system" | "tools" | "messages" | "model" | "params" | "ambiguous" | "unattributed"
     turns: int              # turns whose cache broke for this cause
     repaid_tokens: int      # tokens paid twice, from the conservation identity
     usd_low: float          # all repaid tokens landing in the cheapest bucket seen
     usd_high: float         # all repaid tokens landing in the most expensive bucket seen
+    candidates: tuple[str, ...] = ()  # set only for `ambiguous`: the ≥2 component names
 
 
 @dataclass(frozen=True)
 class CauseBreakdown:
     by_cause: list[CauseCost]
+    ambiguous: CauseCost        # ledger broke, but ≥2 components diverged: no single cause
     unattributed: CauseCost      # ledger broke, attributor could not say why
     disputed_turns: int          # attributor saw a break, ledger did not (counted only)
     not_measured_turns: int      # usage missing, or repaid < 0 (instrument anomaly)
@@ -272,6 +275,7 @@ def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
 
     cause_state = {c: {"turns": 0, "repaid": 0, "low": 0.0, "high": 0.0}
                    for c in COMPONENTS}
+    ambiguous = {"turns": 0, "repaid": 0, "low": 0.0, "high": 0.0, "candidates": set()}
     unattributed = {"turns": 0, "repaid": 0, "low": 0.0, "high": 0.0}
     disputed = 0
     not_measured = 0
@@ -306,7 +310,16 @@ def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
         usage = normalise(curr.get("provider"), curr.get("usage"))
         low, high = _loss_interval(repaid, usage, rate, model_key, rates)
 
-        bucket = unattributed if (d is None or d.suppressed) else cause_state[d.component]
+        if d is None or d.suppressed:
+            bucket = unattributed
+        elif d.order_stability < 1.0:
+            # Several components diverged: the first one is an artifact of the
+            # swept segment order, so the turn cannot be charged to any single
+            # cause. Priced, but only against the candidate list, never a name.
+            bucket = ambiguous
+            ambiguous["candidates"].update(d.candidates)
+        else:
+            bucket = cause_state[d.component]
         bucket["turns"] += 1
         bucket["repaid"] += repaid
         bucket["low"] += low
@@ -320,6 +333,14 @@ def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
     ]
     return CauseBreakdown(
         by_cause=by_cause,
+        ambiguous=CauseCost(
+            cause="ambiguous",
+            turns=ambiguous["turns"],
+            repaid_tokens=ambiguous["repaid"],
+            usd_low=ambiguous["low"],
+            usd_high=ambiguous["high"],
+            candidates=_canonical_candidates(ambiguous["candidates"]),
+        ),
         unattributed=CauseCost(
             cause="unattributed",
             turns=unattributed["turns"],

@@ -99,6 +99,11 @@ class Divergence:
     bytes_before: int       # bytes of the current prefix before the divergence (cached)
     bytes_after: int        # bytes after it (repriced at list price)
     suppressed: bool = False  # text diverged after the last cache_control block: cache intact
+    # Every component that diverges, in the fixed :func:`_canonical_candidates`
+    # order — not in the swept ``order``. The default is only here to keep
+    # ``suppressed``'s default position valid; ``attribute`` always sets both.
+    candidates: tuple[str, ...] = ()
+    order_stability: float = 1.0  # 1 / len(candidates); 1.0 means unambiguous
 
 
 def _dump(value: object) -> bytes:
@@ -409,6 +414,47 @@ def _is_suppressed(component: str, within: int, breakpoint: tuple[str, int] | No
     return within >= bp_offset
 
 
+def _diverged_components(prev_body: dict, curr_body: dict) -> set[str]:
+    """Every component that ``attribute`` could report as diverging.
+
+    A component diverges when its normalised bytes differ (and it is not a pure
+    messages append), or — for ``messages``, where ``_normalise_content`` strips
+    the marker — when its ``cache_control`` directives differ while the bytes are
+    equal. This is the candidate set the closed-form ``order_stability`` counts:
+    ``attribute`` returns whichever of these the swept ``order`` names first.
+    """
+    prev_segments = _segments(prev_body)
+    curr_segments = _segments(curr_body)
+    diverged: set[str] = set()
+    for component in COMPONENTS:
+        prev_value = prev_segments[component]
+        curr_value = curr_segments[component]
+        prev_norm = _normalise(component, prev_value)
+        curr_norm = _normalise(component, curr_value)
+        if _dump(prev_norm) != _dump(curr_norm):
+            if component == "messages" and _is_append(prev_value, curr_value):
+                continue
+            diverged.add(component)
+            continue
+        prev_cc = _cache_directives(component, prev_value)
+        curr_cc = _cache_directives(component, curr_value)
+        if prev_cc and curr_cc and prev_cc != curr_cc:
+            diverged.add(component)
+    return diverged
+
+
+def _canonical_candidates(diverged: set[str]) -> tuple[str, ...]:
+    """The diverging components in a fixed physical order, independent of ``order``.
+
+    :data:`CACHE_LAYOUT` fixes ``tools -> system -> messages``; ``model`` heads
+    the prefix and ``params`` is the catch-all tail. Reporting candidates in this
+    fixed order keeps the candidate list a fact of the two bodies rather than an
+    artifact of whichever sweep order was asked for first.
+    """
+    order = ("model",) + CACHE_LAYOUT + ("params",)
+    return tuple(component for component in order if component in diverged)
+
+
 def attribute(
     prev_body: dict, curr_body: dict, *, order: tuple[str, ...] = SEGMENT_ORDER
 ) -> Divergence | None:
@@ -428,6 +474,7 @@ def attribute(
     curr_segments = _segments(curr_body)
     total = len(prefix_bytes(curr_body, order=order))
     breakpoint = _cache_breakpoint(prev_segments)
+    candidates = _canonical_candidates(_diverged_components(prev_body, curr_body))
 
     offset = 0  # bytes of curr's prefix consumed before the current segment
     for component in order:
@@ -463,6 +510,8 @@ def attribute(
                     # change to it moves the write bucket rather than editing an
                     # uncached tail; "after the breakpoint" does not apply.
                     suppressed=False,
+                    candidates=candidates,
+                    order_stability=1.0 / len(candidates),
                 )
             offset += len(curr_bytes)
             continue
@@ -483,6 +532,8 @@ def attribute(
             bytes_before=offset + within,
             bytes_after=total - (offset + within),
             suppressed=_is_suppressed(component, within, breakpoint),
+            candidates=candidates,
+            order_stability=1.0 / len(candidates),
         )
     return None
 

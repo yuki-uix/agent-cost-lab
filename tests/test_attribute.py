@@ -7,12 +7,14 @@ from __future__ import annotations
 import importlib.util
 import itertools
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from agentcostlab.ledger import broke_cache
 from agentcostlab.attribute import (
+    CACHE_LAYOUT,
     COMPONENTS,
     Divergence,
     attribute,
@@ -598,3 +600,83 @@ def test_a_marker_vanishing_entirely_is_left_where_21_put_it():
     for order in ALL_ORDERS:
         assert attribute(with_marker, without, order=order) is None, order
         assert attribute(without, with_marker, order=order) is None, order
+
+
+# --- candidates and order stability (delegation 08) ---------------------------
+
+def _pair_with_divergences(components):
+    """A synthetic request pair where exactly the named components diverge."""
+    base = {
+        "model": "claude-sonnet-5",
+        "system": [{"type": "text", "text": "S", "cache_control": {"type": "ephemeral"}}],
+        "tools": [{"name": "read", "input_schema": {"type": "object"}}],
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant",
+             "content": [{"type": "text", "text": "done", "cache_control": {"type": "ephemeral"}}]},
+        ],
+        "tool_choice": "auto",
+        "max_tokens": 100,
+    }
+    prev = json.loads(json.dumps(base))
+    curr = json.loads(json.dumps(base))
+    for component in components:
+        if component == "model":
+            curr["model"] = "claude-opus-5"
+        elif component == "system":
+            curr["system"][0]["text"] = "S2"
+        elif component == "tools":
+            curr["tools"].append({"name": "bash", "input_schema": {"type": "object"}})
+        elif component == "messages":
+            curr["messages"][0]["content"] = "bye"
+        elif component == "params":
+            curr["tool_choice"] = "any"
+    return prev, curr
+
+
+def test_order_stability_matches_full_enumeration_for_every_k():
+    """AC1: the closed form ``order_stability = 1/len(candidates)`` is checked
+    against a *real* 120-permutation enumeration, not copied into the assertion.
+    For each k in 1..5 a synthetic pair with exactly k diverging components is
+    swept; each of the k candidates must be elected exactly 1/k of the time."""
+    for k in range(1, 6):
+        components = set(COMPONENTS[:k])
+        prev, curr = _pair_with_divergences(components)
+        winners = Counter()
+        for order in ALL_ORDERS:
+            d = attribute(prev, curr, order=order)
+            assert d is not None, (k, order)
+            winners[d.component] += 1
+        # every candidate is elected in exactly 1/k of the 120 orders
+        for component in components:
+            assert winners[component] == len(ALL_ORDERS) // k, (k, component, dict(winners))
+        # nothing outside the candidate set is ever elected
+        assert set(winners) == components
+
+        base = attribute(prev, curr)
+        assert len(base.candidates) == k
+        assert base.order_stability == pytest.approx(1.0 / k)
+        # the closed form equals the *measured* maximum elected proportion
+        measured = max(winners.values()) / len(ALL_ORDERS)
+        assert base.order_stability == pytest.approx(measured)
+
+
+def test_candidates_and_order_stability_are_order_invariant():
+    """AC3: ``candidates`` and ``order_stability`` are properties of the two
+    bodies, not of the sweep order. Across all 120 orders they must be identical
+    — only ``component`` may change, which is the instability being measured."""
+    prev, curr = _pair_with_divergences({"system", "tools"})
+    base = attribute(prev, curr)
+    assert len(base.candidates) == 2
+    # candidates are in CACHE_LAYOUT order, not in the swept order
+    assert base.candidates == ("tools", "system")
+
+    elected = set()
+    for order in ALL_ORDERS:
+        d = attribute(prev, curr, order=order)
+        assert d is not None
+        assert d.candidates == base.candidates
+        assert d.order_stability == base.order_stability
+        elected.add(d.component)
+
+    assert elected == {"system", "tools"}

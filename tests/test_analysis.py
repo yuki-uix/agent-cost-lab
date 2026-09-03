@@ -8,6 +8,7 @@ the file it needs, when ``data/raw/`` is absent.
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import fields
 from pathlib import Path
 
@@ -98,11 +99,14 @@ def test_capture_02_repaid_tokens_is_exactly_2822(capture_02_breakdown):
     """AC1 hard gate: the conservation identity must reproduce the reported 2,822
     tokens paid twice, exactly — not approximately, not from a tokenizer."""
     total = sum(c.repaid_tokens for c in capture_02_breakdown.by_cause) \
+        + capture_02_breakdown.ambiguous.repaid_tokens \
         + capture_02_breakdown.unattributed.repaid_tokens
     assert total == 2822
 
-    # Exactly one turn broke across the whole capture.
+    # Exactly one turn broke across the whole capture, split across the three
+    # mutually exclusive buckets.
     assert sum(c.turns for c in capture_02_breakdown.by_cause) \
+        + capture_02_breakdown.ambiguous.turns \
         + capture_02_breakdown.unattributed.turns == 1
 
 
@@ -125,23 +129,30 @@ def test_capture_02_interval_matches_the_hand_calc(capture_02_breakdown):
             1784 * (2.00 - 0.20) = 1784 * 1.80 = 3211.2
             2387.4 + 3211.2 = 5598.6 / 1e6 = 0.0055986
     """
-    if capture_02_breakdown.unattributed.turns:
-        cause = capture_02_breakdown.unattributed
-    else:
-        (cause,) = [c for c in capture_02_breakdown.by_cause if c.turns]
+    # Exactly one of the three buckets holds the single break turn; pick it.
+    buckets = [c for c in [*capture_02_breakdown.by_cause,
+                           capture_02_breakdown.ambiguous,
+                           capture_02_breakdown.unattributed] if c.turns]
+    (cause,) = buckets
     assert cause.repaid_tokens == 2822
     assert cause.usd_low == pytest.approx(0.0050796)
     assert cause.usd_high == pytest.approx(0.0055986)
 
 
-def test_capture_02_break_is_attributed_to_system(capture_02_breakdown):
-    """AC2, reported not forced: the TTL-switch break lands in ``system``, not
-    ``unattributed``. The attributor names ``system`` / ``field removed: 'ttl'``,
-    which is a *real* attribution, so ``unattributed`` must stay empty."""
+def test_capture_02_break_is_ambiguous_not_system(capture_02_breakdown):
+    """The one real break has *two* diverging components, not one.
+
+    ``attribute()`` names ``system`` (``field removed: 'ttl'``) only because
+    ``system`` precedes ``messages`` in ``SEGMENT_ORDER``. The same turn also adds
+    a ``cache_control`` marker to a ``tool_use`` block in ``messages``, so under
+    a ``messages``-first order the attributor names ``messages`` instead. That is
+    exactly the unreliability this task exists to flag: the turn must land in
+    ``ambiguous`` with both candidates listed, never in ``by_cause[system]``."""
     assert capture_02_breakdown.unattributed.turns == 0
-    system = cause_for(capture_02_breakdown, "system")
-    assert system.turns == 1
-    assert system.repaid_tokens == 2822
+    assert capture_02_breakdown.by_cause == []
+    assert capture_02_breakdown.ambiguous.turns == 1
+    assert capture_02_breakdown.ambiguous.repaid_tokens == 2822
+    assert set(capture_02_breakdown.ambiguous.candidates) == {"system", "messages"}
 
 
 # --- AC3: the interval must span two ends, not collapse to a midpoint --------
@@ -420,3 +431,143 @@ def test_anthropic_records_are_unaffected_by_the_provider_gate(simple_rates):
     ]
     b = cost_by_cause(records, "anthropic/claude-sonnet-5")
     assert cause_for(b, "system").repaid_tokens == 400
+
+
+# --- AC4: a multi-candidate break is never charged to a single cause ---------
+
+def test_a_two_component_break_is_ambiguous_not_charged_to_a_cause(simple_rates):
+    """AC4: when two components diverge, ``order_stability`` is 1/2 and the turn
+    must not be charged to either name — it lands in ``ambiguous`` with both
+    candidates, priced but never attributed to ``system`` or ``messages`` alone.
+
+    This guards the routing in ``cost_by_cause`` against a future mutation that
+    would let ``d.order_stability < 1.0`` slip into ``by_cause``: the moment a
+    multi-candidate turn is folded into a single cause, this test goes red."""
+    records = [
+        rec("a", body={"model": "claude-sonnet-5", "system": "A",
+                       "messages": [{"role": "user", "content": "hi"}]},
+            usage=prev_usage(1000, 200)),
+        rec("b", prev_msg="a",
+            body={"model": "claude-sonnet-5", "system": "B",
+                  "messages": [{"role": "user", "content": "bye"}]},
+            usage=usage(cache_read=800, input_tokens=400)),
+    ]
+    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+
+    assert b.by_cause == []
+    assert b.unattributed.turns == 0
+    assert b.ambiguous.turns == 1
+    assert b.ambiguous.repaid_tokens == 400
+    assert set(b.ambiguous.candidates) == {"system", "messages"}
+    assert b.ambiguous.usd_low == pytest.approx(400 * (1.00 - 0.10) / 1e6)
+
+
+# --- AC5: the three buckets are mutually exclusive and exhaustive -------------
+
+def test_the_three_buckets_are_exhaustive_and_disjoint(simple_rates):
+    """AC5: every broke turn lands in exactly one of ``by_cause`` / ``ambiguous``
+    / ``unattributed`` — never two, never zero. The turn counts sum to the number
+    of broke turns, so no repaid token is counted twice or dropped."""
+    records = [
+        # (1) one diverging component -> by_cause["system"]
+        rec("a1", body={"model": "claude-sonnet-5", "system": "A",
+                        "messages": [{"role": "user", "content": "hi"}]},
+            usage=prev_usage(1000, 200)),
+        rec("b1", prev_msg="a1",
+            body={"model": "claude-sonnet-5", "system": "B",
+                  "messages": [{"role": "user", "content": "hi"}]},
+            usage=usage(cache_read=800, input_tokens=400)),
+        # (2) two diverging components -> ambiguous
+        rec("a2", body={"model": "claude-sonnet-5", "system": "A",
+                        "messages": [{"role": "user", "content": "hi"}]},
+            usage=prev_usage(1000, 200)),
+        rec("b2", prev_msg="a2",
+            body={"model": "claude-sonnet-5", "system": "B",
+                  "messages": [{"role": "user", "content": "bye"}]},
+            usage=usage(cache_read=800, input_tokens=400)),
+        # (3) no divergence -> unattributed
+        rec("a3", body={"model": "claude-sonnet-5", "system": "A",
+                        "messages": [{"role": "user", "content": "hi"}]},
+            usage=prev_usage(1000, 200)),
+        rec("b3", prev_msg="a3",
+            body={"model": "claude-sonnet-5", "system": "A",
+                  "messages": [{"role": "user", "content": "hi"}]},
+            usage=usage(cache_read=800, input_tokens=400)),
+    ]
+    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+
+    assert len(b.by_cause) == 1
+    assert cause_for(b, "system").turns == 1
+    assert cause_for(b, "system").repaid_tokens == 400
+    assert b.ambiguous.turns == 1
+    assert b.ambiguous.repaid_tokens == 400
+    assert set(b.ambiguous.candidates) == {"system", "messages"}
+    assert b.unattributed.turns == 1
+    assert b.unattributed.repaid_tokens == 400
+
+    # exhaustive and disjoint: 3 broke turns -> 3 bucket turns, 1200 repaid tokens
+    assert sum(c.turns for c in b.by_cause) + b.ambiguous.turns + b.unattributed.turns == 3
+    assert (sum(c.repaid_tokens for c in b.by_cause)
+            + b.ambiguous.repaid_tokens + b.unattributed.repaid_tokens) == 1200
+    assert b.disputed_turns == 0
+    assert b.not_measured_turns == 0
+
+
+# --- AC7: the three #50 leftovers --------------------------------------------
+
+def test_three_bucket_overflow_refuses(simple_rates):
+    """#50 leftover: when all three non-cache-read buckets carry tokens but their
+    total capacity still falls short of ``repaid``, refuse rather than scale."""
+    records = [
+        rec("a", body=body("A"), usage=prev_usage(1000, 200)),
+        # expected 1200, read 200 -> repaid 1000; input (100) + 5m (50) + 1h (50)
+        # carry only 200 tokens.
+        rec("b", prev_msg="a", body=body("B"),
+            usage=usage(cache_read=200, input_tokens=100, five=50, hour=50)),
+    ]
+    with pytest.raises(RepaidExceedsCapacity) as exc_info:
+        cost_by_cause(records, "anthropic/claude-sonnet-5")
+    msg = str(exc_info.value)
+    assert "1000" in msg and "200" in msg
+
+
+def test_no_non_cache_read_bucket_refuses(simple_rates):
+    """#50 leftover: repaid > 0 but no non-cache-read bucket carried tokens means
+    the repaid tokens had nowhere to land, so the premise fails and it refuses."""
+    records = [
+        rec("a", body=body("A"), usage=prev_usage(1000, 200)),
+        # repaid 400, but input / 5m / 1h all carry 0 tokens.
+        rec("b", prev_msg="a", body=body("B"), usage=usage(cache_read=800)),
+    ]
+    with pytest.raises(RepaidExceedsCapacity) as exc_info:
+        cost_by_cause(records, "anthropic/claude-sonnet-5")
+    msg = str(exc_info.value)
+    assert "400" in msg and "0" in msg
+
+
+def test_every_priced_bucket_satisfies_zero_le_low_le_high(simple_rates):
+    """#50 leftover: over random usage, 0 <= usd_low <= usd_high always. The
+    cache-read rate is the cheapest of the five, so re-billing can only cost
+    more; the high end packs the most expensive bucket first by construction.
+    A fixed seed keeps the 200-turn sweep reproducible."""
+    rng = random.Random(20260903)
+    for i in range(200):
+        capacity_input = rng.randint(1, 500)
+        capacity_five = rng.randint(1, 500)
+        capacity_hour = rng.randint(1, 500)
+        capacity = capacity_input + capacity_five + capacity_hour
+        repaid = rng.randint(1, capacity)  # guaranteed to fit -> no refusal
+        # prev expected = cache_read + creation = (repaid + 400); curr reads 400,
+        # so the conservation identity yields exactly `repaid`.
+        records = [
+            rec(f"a{i}", body=body("A"), usage=prev_usage(repaid + 200, 200)),
+            rec(f"b{i}", prev_msg=f"a{i}", body=body("B"),
+                usage=usage(cache_read=400, input_tokens=capacity_input,
+                            five=capacity_five, hour=capacity_hour)),
+        ]
+        b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+        system = cause_for(b, "system")
+        assert system.turns == 1, i
+        assert system.repaid_tokens == repaid, i
+        assert 0.0 <= system.usd_low <= system.usd_high, (
+            i, capacity_input, capacity_five, capacity_hour, repaid)

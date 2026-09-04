@@ -495,3 +495,32 @@ def test_no_injection_field_is_not_a_campaign_arm_mismatch():
     score_injection.py's gate to notice, not this one's — so it must not FAIL."""
     _, bad, _ = health.check(healthy())
     assert not any("campaign arms" in b for b in bad), bad
+
+
+# --- the reverse defence, on the real captures (issue #72, AC3) --------------
+#
+# The three synthetic tests above show the criterion fires on a splice and stays
+# quiet on a `messages_changed` break. Neither shows the property the criterion
+# was chosen FOR: zero false positives across every real record this repo holds.
+#
+# That property is not decorative. Two other criteria were measured and rejected
+# for failing it — threading pointers see one connected component, and "the
+# successor is not an append" cuts at exactly the known break seams, 63/49/134
+# spurious splices across these same three files. A checklist saying "verified by
+# hand" is what the repo's own discipline says not to rely on; this is the same
+# statement as a test that re-runs whenever the criterion is touched.
+#
+# Skips when data/raw/ is absent, like the other real-capture tests — those files
+# are gitignored, so a clean checkout cannot see them.
+
+REAL_CAPTURES = ("capture.jsonl", "capture-02.jsonl", "capture-03.jsonl")
+
+
+@pytest.mark.parametrize("name", REAL_CAPTURES)
+def test_no_collision_is_reported_on_a_real_capture(name):
+    path = Path(__file__).resolve().parents[1] / "data" / "raw" / name
+    if not path.exists():
+        pytest.skip(f"{name} not present at {path}; the false-positive rate cannot be checked")
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    findings = health._lineage_collisions(rows)
+    assert findings == [], f"{name}: {len(findings)} false splices, e.g. {findings[:3]}"

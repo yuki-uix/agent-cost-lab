@@ -15,6 +15,10 @@ PORT=8787
 PIDFILE=.capture.pid
 LOG=data/raw/proxy.log
 
+# Port guard (issue #73): start/stop must refuse a half-dead proxy rather than
+# silently record into the wrong capture. See scripts/proxy_guard.sh.
+source "$(dirname "$0")/proxy_guard.sh"
+
 listening() { lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; }
 
 # The capture file does not exist until the first request lands, so a bare
@@ -31,22 +35,10 @@ next_file() {
 
 case "${1:-start}" in
 start)
-    if listening; then
-        echo "already recording into $(cat $PIDFILE.file 2>/dev/null || echo '?')"
-        echo "run 'scripts/capture.sh status' to see it, or 'stop' to finish."
-        exit 0
-    fi
     CAPTURE=$(next_file)
     mkdir -p data/raw
-    ACL_CAPTURE="$CAPTURE" nohup "${ACL_PYTHON:-.venv/bin/python}" -m agentcostlab.proxy \
-        >"$LOG" 2>&1 &
-    echo $! >"$PIDFILE"
+    acl_proxy_start "$CAPTURE" || exit 1
     echo "$CAPTURE" >"$PIDFILE.file"
-    for _ in $(seq 40); do listening && break; sleep 0.25; done
-    if ! listening; then
-        echo "proxy did not come up; see $LOG" >&2
-        exit 1
-    fi
     echo "recording into $CAPTURE   (pid $(cat $PIDFILE), log $LOG)"
     echo
     echo "Now, in the directory you actually want to work in:"
@@ -90,8 +82,8 @@ PY
     ;;
 stop)
     CAPTURE=$(cat $PIDFILE.file 2>/dev/null)
-    [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null
-    rm -f "$PIDFILE" "$PIDFILE.file"
+    acl_proxy_stop || exit 1
+    rm -f "$PIDFILE.file"
     echo "stopped."
     [ -z "$CAPTURE" ] && exit 0
     echo

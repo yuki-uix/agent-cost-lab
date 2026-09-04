@@ -1,0 +1,2126 @@
+{
+  "_source": "reduced by scripts/reduce_collision_fixture.py from data/raw/capture-calib-1.jsonl (the #72/#73 polluted run)",
+  "_expected": "one splice: the merged lineage shrinks 28 -> 2 at records 13 -> 14, and ledger.broke_cache says the seam is harmful",
+  "records": [
+    {
+      "response_id": "129c9499-451e-427c-a112-dce80a1222df",
+      "injected_previous_message_id": null,
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 870,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 1
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-0"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "d8fd07ff-3458-4e7d-a57d-59430350232c",
+      "injected_previous_message_id": null,
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 32046,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 1
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "a4b8e0e3-d558-4cc1-be94-17d8b8e156ec",
+      "injected_previous_message_id": "d8fd07ff-3458-4e7d-a57d-59430350232c",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 73,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32128,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 2
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "586d5c34-8cb6-492a-b240-b6e678b7a243",
+      "injected_previous_message_id": "a4b8e0e3-d558-4cc1-be94-17d8b8e156ec",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 49,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32256,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 3
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "3353d97b-74ee-4b76-83ce-6e9671eda03d",
+      "injected_previous_message_id": "586d5c34-8cb6-492a-b240-b6e678b7a243",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 25,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32384,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 4
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "e74fc1c9-2305-4359-93b0-62bed1ab5b5e",
+      "injected_previous_message_id": "3353d97b-74ee-4b76-83ce-6e9671eda03d",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 130,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32384,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 5
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "b175fc11-0150-4c5f-8957-b9898f6b02a9",
+      "injected_previous_message_id": "e74fc1c9-2305-4359-93b0-62bed1ab5b5e",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 105,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32512,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 6
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "97712fa4-437a-4e78-8c86-e066b0c1abbc",
+      "injected_previous_message_id": "b175fc11-0150-4c5f-8957-b9898f6b02a9",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 82,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32640,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 7
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "78738346-2cf9-4d92-8dda-23a29b57c5bb",
+      "injected_previous_message_id": "97712fa4-437a-4e78-8c86-e066b0c1abbc",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 60,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32768,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 8
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "b925dcc8-13da-4a60-a1e2-4a4fff5eb6f4",
+      "injected_previous_message_id": "78738346-2cf9-4d92-8dda-23a29b57c5bb",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 38,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32896,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 9
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "587d42ba-b1aa-434b-87df-a90baabff3cd",
+      "injected_previous_message_id": "b925dcc8-13da-4a60-a1e2-4a4fff5eb6f4",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 250,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32896,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 10
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          },
+          {
+            "role": "system",
+            "content": "msg-20"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "f4b6eb51-5333-4d92-b1c8-3e33d11c023f",
+      "injected_previous_message_id": "587d42ba-b1aa-434b-87df-a90baabff3cd",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 195,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 33152,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 11
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          },
+          {
+            "role": "system",
+            "content": "msg-20"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-21"
+          },
+          {
+            "role": "user",
+            "content": "msg-22"
+          },
+          {
+            "role": "system",
+            "content": "msg-23"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "f919d713-ef1e-435f-8197-f93fe68e37d4",
+      "injected_previous_message_id": "f4b6eb51-5333-4d92-b1c8-3e33d11c023f",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 45,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 33408,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 12
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          },
+          {
+            "role": "system",
+            "content": "msg-20"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-21"
+          },
+          {
+            "role": "user",
+            "content": "msg-22"
+          },
+          {
+            "role": "system",
+            "content": "msg-23"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-24"
+          },
+          {
+            "role": "user",
+            "content": "msg-25"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "bae15c3e-d459-4908-a793-d985291ed8f6",
+      "injected_previous_message_id": "f919d713-ef1e-435f-8197-f93fe68e37d4",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 157,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 33408,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 13
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          },
+          {
+            "role": "system",
+            "content": "msg-20"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-21"
+          },
+          {
+            "role": "user",
+            "content": "msg-22"
+          },
+          {
+            "role": "system",
+            "content": "msg-23"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-24"
+          },
+          {
+            "role": "user",
+            "content": "msg-25"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-26"
+          },
+          {
+            "role": "user",
+            "content": "msg-27"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "edb41217-5078-4751-9b83-08bef6bb22ad",
+      "injected_previous_message_id": "bae15c3e-d459-4908-a793-d985291ed8f6",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 27879,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 14
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "cedcb718-85af-4dc9-80b2-43d387169ce8",
+      "injected_previous_message_id": "129c9499-451e-427c-a112-dce80a1222df",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 870,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 2
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-0"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "98d2b403-4197-42e0-ba30-9280b92935bb",
+      "injected_previous_message_id": "edb41217-5078-4751-9b83-08bef6bb22ad",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 21958,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 10240,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 15
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "7eb751d1-ca9a-435c-b430-f7988f26f24c",
+      "injected_previous_message_id": "98d2b403-4197-42e0-ba30-9280b92935bb",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 46,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32256,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 16
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "146c3017-58eb-4405-8b15-1465ccd0ae37",
+      "injected_previous_message_id": "7eb751d1-ca9a-435c-b430-f7988f26f24c",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 150,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32256,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 17
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "9ae3493d-80f7-42bb-bcf9-ebb429047828",
+      "injected_previous_message_id": "146c3017-58eb-4405-8b15-1465ccd0ae37",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 127,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32384,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 18
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "f201afa3-3d4a-418b-837f-2db8fdf7feb9",
+      "injected_previous_message_id": "9ae3493d-80f7-42bb-bcf9-ebb429047828",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 102,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32512,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 19
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "4b3e2059-6582-44c6-86dc-9ed7d6bb8be0",
+      "injected_previous_message_id": "f201afa3-3d4a-418b-837f-2db8fdf7feb9",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 79,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32640,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 20
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "9fe5b937-d1b8-427b-93e5-5b96f2dc9a0c",
+      "injected_previous_message_id": "4b3e2059-6582-44c6-86dc-9ed7d6bb8be0",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 57,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32768,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 21
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "0fc3e341-227b-48ba-aa93-21d7af3f0472",
+      "injected_previous_message_id": "9fe5b937-d1b8-427b-93e5-5b96f2dc9a0c",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 35,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32896,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 22
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "f19f87b3-b2fe-4782-a020-71d6b2f15bc1",
+      "injected_previous_message_id": "0fc3e341-227b-48ba-aa93-21d7af3f0472",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 139,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 32896,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 23
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "638e7a64-5c61-472e-97e4-b37cfb8e6144",
+      "injected_previous_message_id": "f19f87b3-b2fe-4782-a020-71d6b2f15bc1",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 212,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 33024,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 24
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-20"
+          },
+          {
+            "role": "user",
+            "content": "msg-21"
+          },
+          {
+            "role": "system",
+            "content": "msg-22"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "7c6931f7-68a7-43ab-a2b9-1f773408699e",
+      "injected_previous_message_id": "638e7a64-5c61-472e-97e4-b37cfb8e6144",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 62,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 33280,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 25
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-20"
+          },
+          {
+            "role": "user",
+            "content": "msg-21"
+          },
+          {
+            "role": "system",
+            "content": "msg-22"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-23"
+          },
+          {
+            "role": "user",
+            "content": "msg-24"
+          }
+        ]
+      }
+    },
+    {
+      "response_id": "0b90137f-e512-45e9-afbf-48e0e8a84037",
+      "injected_previous_message_id": "7c6931f7-68a7-43ab-a2b9-1f773408699e",
+      "status_code": 200,
+      "usage": {
+        "input_tokens": 46,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 33408,
+        "output_tokens": 0,
+        "service_tier": "standard"
+      },
+      "injection": {
+        "id": "i0",
+        "applied": false,
+        "detail": null,
+        "turn": 26
+      },
+      "request_body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "lineage-1"
+          },
+          {
+            "role": "system",
+            "content": "msg-1"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-2"
+          },
+          {
+            "role": "user",
+            "content": "msg-3"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-4"
+          },
+          {
+            "role": "user",
+            "content": "msg-5"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-6"
+          },
+          {
+            "role": "user",
+            "content": "msg-7"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-8"
+          },
+          {
+            "role": "user",
+            "content": "msg-9"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-10"
+          },
+          {
+            "role": "user",
+            "content": "msg-11"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-12"
+          },
+          {
+            "role": "user",
+            "content": "msg-13"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-14"
+          },
+          {
+            "role": "user",
+            "content": "msg-15"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-16"
+          },
+          {
+            "role": "user",
+            "content": "msg-17"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-18"
+          },
+          {
+            "role": "user",
+            "content": "msg-19"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-20"
+          },
+          {
+            "role": "user",
+            "content": "msg-21"
+          },
+          {
+            "role": "system",
+            "content": "msg-22"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-23"
+          },
+          {
+            "role": "user",
+            "content": "msg-24"
+          },
+          {
+            "role": "assistant",
+            "content": "msg-25"
+          },
+          {
+            "role": "user",
+            "content": "msg-26"
+          }
+        ]
+      }
+    }
+  ]
+}

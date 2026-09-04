@@ -59,6 +59,12 @@ E1 章自己写了阻塞原因，一字不改地引在这里：
 **I5 最贵**：要先把上下文累积到压缩阈值才能触发。可以复用 E3 的 `capture-03.jsonl`
 路径（那次的 `/compact` 已经采到），若能复用则不重复花钱。
 
+**采集协议（#72 的预防）。** 每次 capture 的 task prompt 开头必须带一个 run number
+或随机 nonce，让两条会话的 `messages[0]` 必然不同。原因：`_lineage_key` 只对
+`messages[0]` 取哈希，两次跑的任务开头一字不差时会被合并成同一条 lineage，撞车的
+seam 会被误当成一次缓存断裂（#72）。nonce 是**预防**；`scripts/capture_health.py`
+的 lineage-collision gate 是**兜底**——它不依赖 nonce 存在，只在真的撞车时报 FAIL。
+
 ---
 
 ## 3. Ground truth：三方对照

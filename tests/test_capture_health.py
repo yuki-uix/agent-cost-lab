@@ -6,6 +6,7 @@ records shaped like the three failures that actually occurred.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -384,3 +385,113 @@ def test_the_witness_needs_a_demonstrated_break_not_an_absent_measurement():
     must be a break that happened, never a measurement that did not."""
     assert _witness_pair({}, {"cache_read_input_tokens": 100}) is False
     assert _witness_pair({"foo": 1}, {"foo": 2}) is False
+
+
+# --- gate A: lineage collision (issue #72) -----------------------------------
+
+def _shrink_rows(n_prev=28, n_curr=2, first="same-prompt"):
+    """Two records that share ``messages[0]`` and whose list shrinks: a splice."""
+    prev = rec(0, rid="msg_p")
+    prev["request_body"]["messages"] = [{"role": "user", "content": first}] * n_prev
+    curr = rec(1, rid="msg_c")
+    curr["request_body"]["messages"] = [{"role": "user", "content": first}] * n_curr
+    return prev, curr
+
+
+def test_collision_is_detected_without_a_threading_pointer():
+    """AC2: the judgement must not read ``injected_previous_message_id``. Neither
+    record carries one, and the shrink is still found — the splice is caught by
+    the message count alone."""
+    prev, curr = _shrink_rows()
+    prev["injected_previous_message_id"] = None
+    curr["injected_previous_message_id"] = None
+    findings = health._lineage_collisions([prev, curr])
+    assert [f["prev_n"] for f in findings] == [28]
+    assert [f["curr_n"] for f in findings] == [2]
+
+
+def test_a_real_messages_changed_break_is_not_a_collision():
+    """AC3: a real break rewrites an earlier message while the list still grows.
+    The count does not shrink, so gate A must stay silent — judging "not an
+    append" would misreport every genuine cache break as a splice."""
+    prev = rec(0, rid="msg_p")
+    prev["request_body"]["messages"] = [{"role": "user", "content": "seed"},
+                                        {"role": "assistant", "content": "old"}]
+    curr = rec(1, rid="msg_c")
+    curr["request_body"]["messages"] = [{"role": "user", "content": "seed"},
+                                        {"role": "assistant", "content": "rewritten"},
+                                        {"role": "user", "content": "next"}]
+    assert health._lineage_collisions([prev, curr]) == []
+
+
+def test_a_shrink_that_does_not_break_the_cache_is_reported_not_failed():
+    """Severity is graded by harm, not shape. A shrink whose seam the ledger does
+    not witness as a break is reported in the ``----`` tier and must not FAIL —
+    failing on shape would condemn the harmless ``<transcript>`` collisions."""
+    prev, curr = _shrink_rows(n_prev=3, n_curr=1)
+    prev["usage"] = {"cache_read_input_tokens": 100, "cache_creation_input_tokens": 0}
+    curr["usage"] = {"cache_read_input_tokens": 200, "cache_creation_input_tokens": 0}
+    _, bad, stats = health.check([prev, curr])
+    assert not any("splices" in b for b in bad), bad
+    assert any("splices" in u for u in stats["undecidable"]), stats["undecidable"]
+
+
+def test_a_harmful_splice_fails_the_capture():
+    """A shrink the ledger witnesses as a break has polluted the break count, so
+    the capture is unusable and the FAIL line names the seam."""
+    prev, curr = _shrink_rows()
+    prev["usage"] = {"cache_read_input_tokens": 33408, "cache_creation_input_tokens": 0}
+    curr["usage"] = {"cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    _, bad, _ = health.check([prev, curr])
+    assert any("splices two conversations" in b and "28->2" in b and "polluted" in b
+               for b in bad), bad
+
+
+COLLISION_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "lineage" / "collision-calib.json"
+
+
+def test_reduced_fixture_reproduces_the_calibration_splice():
+    """The fixture stripped all free text but keeps the verdict: one splice, the
+    same seam position, the same counts, the same harmful flag."""
+    records = json.loads(COLLISION_FIXTURE.read_text())["records"]
+    findings = health._lineage_collisions(records)
+    assert len(findings) == 1, findings
+    f = findings[0]
+    assert (f["prev_i"], f["curr_i"], f["prev_n"], f["curr_n"], f["harmful"]) \
+        == (13, 14, 28, 2, True)
+
+
+def test_reduced_fixture_fails_the_health_gate_on_the_splice():
+    """The integration path: ``check`` on the reduced fixture produces the FAIL
+    line naming the seam, not merely the extracted findings."""
+    records = json.loads(COLLISION_FIXTURE.read_text())["records"]
+    _, bad, _ = health.check(records)
+    assert any("splices two conversations" in b and "13->14" in b and "28->2" in b
+               for b in bad), bad
+
+
+# --- gate B: one campaign arm per capture (issue #73) -------------------------
+
+def _arm(rows, arm="i0"):
+    for r in rows:
+        r["injection"] = {"id": arm, "applied": False, "detail": None, "turn": 1}
+    return rows
+
+
+def test_two_campaign_arms_in_one_capture_fails():
+    rows = _arm(healthy())
+    rows[3]["injection"] = {"id": "i1", "applied": False, "detail": None, "turn": 3}
+    _, bad, _ = health.check(rows)
+    assert any("campaign arms" in b and "i0" in b and "i1" in b for b in bad), bad
+
+
+def test_a_single_campaign_arm_is_ok():
+    _, bad, _ = health.check(_arm(healthy()))
+    assert not any("campaign arms" in b for b in bad), bad
+
+
+def test_no_injection_field_is_not_a_campaign_arm_mismatch():
+    """Historical captures carry no ``injection`` at all. That is
+    score_injection.py's gate to notice, not this one's — so it must not FAIL."""
+    _, bad, _ = health.check(healthy())
+    assert not any("campaign arms" in b for b in bad), bad

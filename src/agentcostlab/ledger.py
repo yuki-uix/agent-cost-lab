@@ -11,7 +11,7 @@ checked against, so it must not share the reasoning it is checking.
 """
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import dataclass, fields
 
 from .providers import EXTRACTORS, Usage, normalise
 
@@ -26,10 +26,36 @@ from .providers import EXTRACTORS, Usage, normalise
 # DeepSeek's native usage also reports ``prompt_tokens`` (it equals hit + miss),
 # so ``prompt_tokens`` cannot tell the two apart. ``prompt_tokens_details`` is
 # OpenAI-only.
-SHAPE_KEYS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("cache_read_input_tokens", "cache_creation_input_tokens"),
-    "deepseek": ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"),
-    "openai": ("prompt_tokens_details",),
+# Each provider's identifying keys, and what a *readable* one has to be. The
+# kind is not decoration: a key that says "this record is OpenAI" while holding
+# `null` identifies a shape it cannot supply, and `_openai` then reads
+# `(u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0` as a
+# confident cached=0. Identification and readability were separate mechanisms
+# and nothing connected them; declaring the kind here is what joins them.
+COUNT, OBJECT = "count", "object"
+
+
+@dataclass(frozen=True)
+class Key:
+    """What an identifying key has to hold to be readable.
+
+    `required` is what an OBJECT must actually carry. An empty container passes
+    an `isinstance(dict)` test and then reads as a confident zero, which cannot
+    be told apart from "the provider did not report it" — so the counts the
+    extractor pulls out of it are named here, and a container missing them is
+    not measurable.
+    """
+
+    kind: str
+    required: tuple[str, ...] = ()
+
+
+SHAPE_KEYS: dict[str, dict[str, Key]] = {
+    "anthropic": {"cache_read_input_tokens": Key(COUNT),
+                  "cache_creation_input_tokens": Key(COUNT)},
+    "deepseek": {"prompt_cache_hit_tokens": Key(COUNT),
+                 "prompt_cache_miss_tokens": Key(COUNT)},
+    "openai": {"prompt_tokens_details": Key(OBJECT, ("cached_tokens",))},
 }
 
 
@@ -100,8 +126,10 @@ def _normalise(record: dict) -> Usage | None:
     if not isinstance(usage, dict) or not usage:
         return None
     matches = [provider for provider in EXTRACTORS
-               if any(key in usage for key in SHAPE_KEYS.get(provider, ()))]
+               if any(key in usage for key in SHAPE_KEYS.get(provider, {}))]
     if len(matches) != 1:
+        return None
+    if not _identifying_keys_are_readable(usage, SHAPE_KEYS[matches[0]]):
         return None
     if not _raw_counts_are_sane(usage):
         return None
@@ -110,6 +138,41 @@ def _normalise(record: dict) -> Usage | None:
     except (AttributeError, TypeError, ValueError):
         return None
     return counted if _counts_are_sane(counted) else None
+
+
+def _identifying_keys_are_readable(usage: dict, shape: dict[str, str]) -> bool:
+    """A key that identifies this shape must, if present, hold what it claims.
+
+    Shape matching is key *presence*, so `prompt_tokens_details: false` both
+    names the record OpenAI and gives `_openai` nothing to read — it falls back
+    to `or {}` and reports cached=0, which against a previous turn that cached
+    1,000 tokens is a total break the record never had. The same hole the falsy
+    *counts* had, one level up, in the container that decides the shape.
+
+    Only *identifying* keys are held to this. A non-identifying container may
+    legitimately be falsy: anthropic's `cache_creation` absent means "no TTL
+    breakdown", and `_anthropic` routes the write to `cache_write_unspecified`,
+    which `cost` then refuses to price rather than guessing a tier. That is
+    graceful degradation the extractor documents; this is a shape claiming to be
+    something it is not.
+    """
+    for key, spec in shape.items():
+        if key not in usage:
+            continue
+        value = usage[key]
+        if spec.kind == OBJECT:
+            if not isinstance(value, dict):
+                return False
+            if not all(_is_count(value.get(name)) for name in spec.required):
+                return False
+        elif not _is_count(value):
+            return False
+    return True
+
+
+def _is_count(value: object) -> bool:
+    """A token count: a non-negative whole number. `bool` is not one."""
+    return not isinstance(value, bool) and isinstance(value, int) and value >= 0
 
 
 def _raw_counts_are_sane(usage: dict) -> bool:

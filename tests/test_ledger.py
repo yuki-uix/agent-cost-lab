@@ -387,3 +387,55 @@ def test_every_count_key_is_named_tokens():
     # would reject the object it needs to descend into
     for container in ("cache_creation", "prompt_tokens_details", "output_tokens_details"):
         assert not container.endswith("_tokens")
+
+
+# --- the key that identifies a shape must itself be readable -----------------
+
+@pytest.mark.parametrize("details", [None, False, "", [], 0, {}, "x", {"other": 1},
+                                     {"cached_tokens": "5"}, {"cached_tokens": -1}])
+def test_an_unreadable_openai_details_container_is_not_measurable(details):
+    """Shape matching is key *presence*, so `prompt_tokens_details: false` both
+    names the record OpenAI and leaves `_openai` nothing to read — it falls back
+    to `or {}` and reports cached=0. Against a turn that cached 1,000 tokens that
+    is a total break the record never had: the falsy-count hole one level up, in
+    the container that decides the shape.
+
+    An empty or incomplete object is refused too: it passes `isinstance(dict)`
+    and then reads as a confident zero that cannot be told from "not reported"."""
+    prev = {"usage": {"prompt_tokens": 2000, "prompt_tokens_details": {"cached_tokens": 1000}}}
+    curr = {"usage": {"prompt_tokens": 2000, "prompt_tokens_details": details}}
+    assert broke_cache(prev, curr) is None
+
+
+def test_a_readable_openai_pair_is_still_measured():
+    prev = {"usage": {"prompt_tokens": 2000, "prompt_tokens_details": {"cached_tokens": 1000}}}
+    curr = {"usage": {"prompt_tokens": 2000, "prompt_tokens_details": {"cached_tokens": 500}}}
+    assert broke_cache(prev, curr) is True
+
+
+@pytest.mark.parametrize("cache_creation", [None, False, {}])
+def test_a_falsy_non_identifying_container_is_still_legitimate(cache_creation):
+    """Only *identifying* keys are held to their kind. Anthropic's
+    `cache_creation` absent means "no TTL breakdown", and `_anthropic` routes the
+    write to `cache_write_unspecified` — which `cost` then refuses to price
+    rather than guessing a tier. That is graceful degradation the extractor
+    documents, not a shape claiming to be something it is not."""
+    prev = {"usage": {"cache_read_input_tokens": 100, "cache_creation_input_tokens": 50,
+                      "cache_creation": cache_creation}}
+    curr = {"usage": {"cache_read_input_tokens": 200, "cache_creation_input_tokens": 0}}
+    assert broke_cache(prev, curr) is False
+
+
+def test_every_object_shape_key_declares_what_it_must_carry():
+    """An OBJECT key that required nothing would pass on an empty container and
+    read as a confident zero — the hole this registry closed. Stated so that a
+    provider added later cannot register a container without saying what makes
+    one readable."""
+    from agentcostlab.ledger import OBJECT
+    for provider, shape in SHAPE_KEYS.items():
+        for key, spec in shape.items():
+            if spec.kind == OBJECT:
+                assert spec.required, (
+                    f"{provider}.{key} is an OBJECT shape key that requires no "
+                    f"counts; an empty container would identify the shape and "
+                    f"then read as zero")

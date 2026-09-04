@@ -170,6 +170,78 @@ measures.
 
 ---
 
+## E4 — deliberate fault injection, as the attributor's acceptance test
+
+Unlike E1–E3, these rows are not bets about the world. They are bets about **this
+repo's own instrument**: five faults are injected on purpose, the cause of each
+is therefore known in advance, and the question is whether the attributor names
+it. A diagnostic tool that has only ever been checked against negatives has not
+been checked.
+
+| # | Question | Predicted | Falsified if | Actual | Verdict |
+|---|---|---|---|---|---|
+| 4.1 | Does every injected fault actually break the prefix, as judged by the ledger? | **Yes** — each of I1–I5 produces at least 1 turn the ledger calls a break | any one fault runs its full turn budget with no break | | |
+| 4.2 | Component-level attribution: how many of the five injected causes does the attributor name correctly? | **≥ 4 of 5** | ≤ 3 of 5 | | |
+| 4.3 | Detail-level attribution (which tool / message index / field): how many does it point at correctly? | **≥ 3 of 5** | ≤ 2 of 5 | | |
+| 4.4 | On turns carrying an official `cache_miss_reason`, how often does the self-built attributor agree at component level? | **≥ 90%** | < 90% | | |
+| 4.5 | Does the I0 control produce false breaks? | **No** — 0 turns judged broken | ≥ 1 break that cannot be attributed to TTL churn or a known external cause | | |
+| 4.6 | Is I2 (tool-schema key order) intermittent rather than always-on or never? | break rate lands in **20%–80%** at n ≥ 5 | the rate is 0% or 100% | | |
+
+**Reasoning**
+
+**4.1 is mechanical, hence the high confidence.** The faults are constructed to
+change bytes inside the cached prefix, and the ledger judges breaks from billed
+usage rather than from the attributor's own reasoning. If a deliberate prefix
+edit produced no billing change, the instrument — not the prediction — would be
+what failed.
+
+**4.2 is the row this whole campaign exists for.** "The cache broke" is something
+the provider already reports; "it broke because of this component" is the only
+thing this repo adds. `docs/direction.md` §6 makes 4.2 the gate for the
+diagnoser: if the attributor cannot name a cause it was *told* in advance, then
+naming causes is not a capability this tool has.
+
+**4.3 is a strictly harder claim than 4.2 and is ranked least confident for that
+reason.** Component-level attribution has 5 candidates; detail-level has to pick
+the right tool out of ~50, or the right message index out of a long history. The
+attributor's `detail`/`path` fields have never been checked against a known
+answer at all.
+
+**4.5 is middling, not high, and the reason is already in the data.** Both real
+breaks this repo has captured were driven by `cache_control` TTL changes with no
+content edit (capture-02 record 61; the three breaks in capture-03). A control
+arm that sits idle is therefore not obviously break-free: TTL churn is a live
+mechanism that fires without anyone changing a prompt. The falsification band
+excludes TTL specifically so that the row measures *false attribution*, not
+Anthropic's cache lifecycle.
+
+**4.6 is least confident because the mechanism is uncertain.** Whether shuffling
+`input_schema` key order breaks the prefix depends on whether the client
+re-serialises tools with stable ordering; it may turn out to be always-on (if
+every request reshuffles) or never (if the serialiser canonicalises). n ≥ 5 is
+thin for anything with run-to-run variance, and a rate at either extreme is more
+likely to mean "the mechanism is not what we thought" than "the band was wrong".
+
+**Scoring denominators are fixed here, before the data.** 4.2 and 4.3 are scored
+out of **five** faults, I1–I5. I5 (history compaction) cannot be injected by the
+proxy — it is client-driven — and how it is captured is still undecided
+(`docs/e4-tasks.md` §3). **If I5 is not run, or its capture cannot be scored, it
+counts as not-matched; the denominator stays 5 and the threshold does not move.**
+Rescoring against however many arms happened to run is the escape hatch this
+file exists to close: it would let a 3-of-4 result be reported as passing.
+
+**4.4 is scored only on turns where an official verdict exists.** Anthropic
+returns `unavailable` beyond its comparison horizon, and those turns are not
+evidence either way — they are excluded from the denominator and reported
+separately, not counted as agreement.
+
+**Kill criterion.** If 4.2 is falsified, the finding is that component-level
+attribution is unreliable — not that the campaign failed. The dollar line
+(ledger conservation + verified rates) does not depend on the attributor and is
+not scored by these rows; see #55.
+
+---
+
 ## Prior beliefs carried in from RepoCoach
 
 Measured once already, on a different harness and provider. Re-testing them here
@@ -203,14 +275,19 @@ that earns a separate experiment; it does not earn a verdict here.
 
 Ranked, so that being wrong is informative:
 
-- **Most confident:** 2.1, 2.3, P3 — mechanical, follow from how caching works.
-- **Middling:** 1.1, 1.2, 1.4, 2.2, 2.4, P1, P2 — plausible mechanisms, real
-  chance of surprise.
-- **Least confident:** 1.3, 2.5, 3.1, 3.2 — 3.1 is arithmetic on an assumed
-  compaction ratio and 3.2 inherits that weakness; 2.5 may be under-powered at
-  n=5 rather than truly null.
+- **Most confident:** 2.1, 2.3, 4.1, P3 — mechanical, follow from how caching
+  works; 4.1 because a deliberate edit inside the cached prefix must show up in
+  billed usage.
+- **Middling:** 1.1, 1.2, 1.4, 2.2, 2.4, 4.2, 4.4, 4.5, P1, P2 — plausible
+  mechanisms, real chance of surprise. 4.5 sits here rather than higher because
+  TTL churn breaks prefixes without anyone editing a prompt.
+- **Least confident:** 1.3, 2.5, 3.1, 3.2, 4.3, 4.6 — 3.1 is arithmetic on an
+  assumed compaction ratio and 3.2 inherits that weakness; 2.5 may be
+  under-powered at n=5 rather than truly null; 4.3 asks for a needle (one tool
+  among ~50) where 4.2 asks for a haystack; 4.6 depends on a serialisation
+  detail that has not been established.
 
-All 14 rows appear exactly once above. If a row is added later it must be ranked
+All 20 rows appear exactly once above. If a row is added later it must be ranked
 in the same commit.
 
 P2 is ranked here for completeness, but carries † — it is **not judged this

@@ -18,6 +18,7 @@ from agentcostlab import analysis
 from agentcostlab.analysis import (
     CauseBreakdown,
     CauseCost,
+    MissingModel,
     NonAnthropicProvider,
     RecordRateMismatch,
     RepaidExceedsCapacity,
@@ -35,12 +36,12 @@ SIMPLE = {
                                        cache_write_5m=1.25, cache_write_1h=2.0,
                                        output=5.0, source="https://example.test",
                                        retrieved_at="2026-08-19", verified=True),
-    # Present only so a DeepSeek key is *verifiable* when we assert the
-    # non-Anthropic refusal (P3) fires after the rate gate, not before it.
-    "deepseek/deepseek-chat": Rate(input_uncached=0.0, cache_read=0.0,
-                                    cache_write_5m=0.0, cache_write_1h=0.0,
-                                    output=0.0, source="https://example.test",
-                                    retrieved_at="2026-08-19", verified=True),
+    # A second Anthropic model at a clean 3x the sonnet rate, so a mixed-model
+    # capture's per-record pricing is trivially hand-checkable.
+    "anthropic/claude-opus-5": Rate(input_uncached=3.0, cache_read=0.3,
+                                     cache_write_5m=3.75, cache_write_1h=6.0,
+                                     output=15.0, source="https://example.test",
+                                     retrieved_at="2026-08-19", verified=True),
 }
 
 
@@ -59,8 +60,8 @@ def rec(resp, prev_msg=None, *, provider="anthropic", usage=None, body=None):
     return record
 
 
-def body(system_text):
-    return {"model": "claude-sonnet-5", "system": system_text,
+def body(system_text, model="claude-sonnet-5"):
+    return {"model": model, "system": system_text,
             "messages": [{"role": "user", "content": "hi"}]}
 
 
@@ -92,7 +93,7 @@ def capture_02_breakdown():
     if not capture.exists():
         pytest.skip(f"capture-02 not present at {capture}; AC1 cannot be checked")
     rows = [json.loads(line) for line in capture.read_text().splitlines() if line.strip()]
-    return cost_by_cause(rows, "anthropic/claude-sonnet-5")
+    return cost_by_cause(rows)
 
 
 def test_capture_02_repaid_tokens_is_exactly_2822(capture_02_breakdown):
@@ -168,7 +169,7 @@ def test_interval_spans_when_two_buckets_are_present(simple_rates):
         rec("b", prev_msg="a", body=body("B"),
             usage=usage(cache_read=800, input_tokens=400, hour=400)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     system = cause_for(b, "system")
     assert system.turns == 1
@@ -187,7 +188,7 @@ def test_a_single_bucket_degrades_to_a_point(simple_rates):
         # at least the full 400 repaid tokens so the single bucket holds them all.
         rec("b", prev_msg="a", body=body("B"), usage=usage(cache_read=800, five=400)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     system = cause_for(b, "system")
     assert system.repaid_tokens == 400
@@ -206,7 +207,7 @@ def test_repaid_exceeding_bucket_capacity_refuses(simple_rates):
             usage=usage(cache_read=800, input_tokens=100, five=50)),
     ]
     with pytest.raises(RepaidExceedsCapacity) as exc_info:
-        cost_by_cause(records, "anthropic/claude-sonnet-5")
+        cost_by_cause(records)
     msg = str(exc_info.value)
     assert "400" in msg and "150" in msg
 
@@ -220,7 +221,7 @@ def test_repaid_equal_to_capacity_fills_every_bucket_to_the_brim(simple_rates):
         rec("b", prev_msg="a", body=body("B"),
             usage=usage(cache_read=850, input_tokens=100, five=50)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     system = cause_for(b, "system")
     assert system.repaid_tokens == 150
@@ -239,7 +240,7 @@ def test_a_zero_capacity_bucket_never_sets_the_bound(simple_rates):
         rec("b", prev_msg="a", body=body("B"),
             usage=usage(cache_read=800, input_tokens=400, hour=0)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     system = cause_for(b, "system")
     assert system.repaid_tokens == 400
@@ -262,12 +263,15 @@ def test_bytes_and_tokens_never_share_a_numeric_column():
 # --- AC5: unverified rates refuse, and an unpriceable write propagates -------
 
 def test_unverified_rate_raises_instead_of_a_partial_result(monkeypatch):
+    """A record whose rate resolves but is ``verified: false`` must refuse, not
+    publish a number from a blog-post rate."""
     unverified = {"anthropic/claude-sonnet-5": Rate(input_uncached=1.0, cache_read=0.1, cache_write_5m=1.25,
                               cache_write_1h=2.0, output=5.0, source="blog post",
                               retrieved_at="2026-08-17", verified=False)}
     monkeypatch.setattr(analysis, "load_rates", lambda: unverified)
+    records = [rec("a", body=body("A"), usage=prev_usage(1000, 200))]
     with pytest.raises(UnverifiedRate):
-        cost_by_cause([], "anthropic/claude-sonnet-5")
+        cost_by_cause(records)
 
 
 def test_an_unpriceable_cache_write_propagates(simple_rates):
@@ -280,7 +284,7 @@ def test_an_unpriceable_cache_write_propagates(simple_rates):
                    "cache_creation_input_tokens": 100, "output_tokens": 0}),
     ]
     with pytest.raises(AmbiguousCacheWrite):
-        cost_by_cause(records, "anthropic/claude-sonnet-5")
+        cost_by_cause(records)
 
 
 # --- the three "cannot tell" buckets stay separate ---------------------------
@@ -293,7 +297,7 @@ def test_a_break_the_attributor_cannot_explain_is_unattributed_and_priced(simple
         # input carries the full 400 repaid tokens, so it is the only bucket in play.
         rec("b", prev_msg="a", body=body("A"), usage=usage(cache_read=800, input_tokens=400)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     assert not b.by_cause
     assert b.unattributed.turns == 1
@@ -309,7 +313,7 @@ def test_a_divergence_the_ledger_does_not_see_is_disputed_not_priced(simple_rate
         # cache_read equals the expected 1100 -> no break; bodies diverge anyway.
         rec("b", prev_msg="a", body=body("B"), usage=usage(cache_read=1100)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     assert b.disputed_turns == 1
     assert not b.by_cause
@@ -322,7 +326,7 @@ def test_missing_usage_is_not_measured_not_a_break(simple_rates):
         rec("a", body=body("A"), usage=prev_usage(1000, 100)),
         rec("b", prev_msg="a", body=body("B")),  # no usage key at all
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
     assert b.not_measured_turns == 1
     assert not b.by_cause
     assert b.disputed_turns == 0
@@ -335,7 +339,7 @@ def test_reading_more_than_expected_is_an_anomaly_not_a_negative_loss(simple_rat
         rec("a", body=body("A"), usage=prev_usage(1000, 100)),
         rec("b", prev_msg="a", body=body("B"), usage=usage(cache_read=1200)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
     assert b.not_measured_turns == 1
     assert not b.by_cause
     assert b.unattributed.repaid_tokens == 0
@@ -346,58 +350,68 @@ def test_reading_more_than_expected_is_an_anomaly_not_a_negative_loss(simple_rat
 def test_hit_usd_saved_is_the_read_discount_not_netted_against_losses(simple_rates):
     """Every cache read is billed at 0.1x instead of 1x; the difference is the
     saving, and it is a separate field, never subtracted from the break losses."""
-    records = [rec("a", usage=usage(cache_read=1000))]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    records = [rec("a", body=body("A"), usage=usage(cache_read=1000))]
+    b = cost_by_cause(records)
     assert b.hit_usd_saved == pytest.approx(1000 * (1.0 - 0.1) / 1e6)
     assert not b.by_cause
     assert b.unattributed.usd_low == 0.0
 
 
-# --- P2: every record must match the pricing key -----------------------------
+# --- P2: each record prices itself, or refuses naming itself -----------------
 
-def test_mixed_provider_records_refuse_and_name_the_record(simple_rates):
-    """One model_key prices every record, so a DeepSeek record slipped into an
-    Anthropic capture must refuse, naming the record index and both providers."""
+def test_a_mixed_model_capture_prices_each_record_at_its_own_rate(simple_rates):
+    """#59: a capture mixing two models is priced per-record — each break at its
+    own model's rate, summed — never by merging tokens and averaging rates."""
+    records = [
+        # sonnet lineage: expected 1200, read 800 -> repaid 400 @ sonnet
+        rec("a", body=body("A"), usage=prev_usage(1000, 200)),
+        rec("b", prev_msg="a", body=body("B"),
+            usage=usage(cache_read=800, input_tokens=400)),
+        # opus lineage: expected 2500, read 2300 -> repaid 200 @ opus
+        rec("c", body=body("C", model="claude-opus-5"), usage=prev_usage(2000, 500)),
+        rec("d", prev_msg="c", body=body("D", model="claude-opus-5"),
+            usage=usage(cache_read=2300, input_tokens=200)),
+    ]
+    b = cost_by_cause(records)
+
+    system = cause_for(b, "system")
+    assert system.turns == 2
+    assert system.repaid_tokens == 600
+    # sonnet: 400 @ (1.00 - 0.10); opus: 200 @ (3.00 - 0.30); one bucket each.
+    assert system.usd_low == pytest.approx((400 * 0.90 + 200 * 2.70) / 1e6)
+    assert system.usd_high == pytest.approx((400 * 0.90 + 200 * 2.70) / 1e6)
+
+
+def test_an_unknown_model_refuses_and_names_the_record(simple_rates):
+    """A model with no rate entry must refuse, naming the record index and the
+    provider/model that could not be resolved — not bill it at some other rate."""
     records = [
         rec("a", body=body("A"), usage=prev_usage(1000, 200)),
-        rec("b", prev_msg="a", provider="deepseek", body=body("B"),
+        rec("b", prev_msg="a", body={"model": "claude-haiku-4-5", "system": "B"},
             usage=usage(cache_read=800, input_tokens=400)),
     ]
     with pytest.raises(RecordRateMismatch) as exc_info:
-        cost_by_cause(records, "anthropic/claude-sonnet-5")
+        cost_by_cause(records)
     msg = str(exc_info.value)
     assert "record 1" in msg
-    assert "deepseek" in msg and "anthropic" in msg
+    assert "claude-haiku-4-5" in msg
+    assert "anthropic/claude-haiku-4-5" in msg
 
 
-def test_a_mismatched_model_refuses(simple_rates):
-    """A capture of one model priced under another's key must refuse, not bill
-    silently at the wrong rate."""
-    records = [
-        rec("a", body=body("A"), usage=prev_usage(1000, 200)),
-        rec("b", prev_msg="a", body={"model": "claude-opus-5", "system": "B"},
-            usage=usage(cache_read=800, input_tokens=400)),
-    ]
-    with pytest.raises(RecordRateMismatch) as exc_info:
-        cost_by_cause(records, "anthropic/claude-sonnet-5")
-    msg = str(exc_info.value)
-    assert "record 1" in msg
-    assert "claude-opus-5" in msg and "claude-sonnet-5" in msg
-
-
-def test_a_record_without_a_model_field_is_not_rejected(simple_rates):
-    """Only *present* fields are validated: a body without a ``model`` key passes
-    the model check and the rest of the pipeline still runs."""
+def test_a_record_without_a_model_field_refuses(simple_rates):
+    """No ``model`` field -> refuse rather than guess: a body that omits the model
+    cannot be priced, and guessing the most common model would bill a possibly
+    different model at the wrong rate."""
     records = [
         rec("a", body={"system": "A"}, usage=prev_usage(1000, 200)),
         rec("b", prev_msg="a", body={"system": "B"},
             usage=usage(cache_read=800, input_tokens=400)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
-
-    system = cause_for(b, "system")
-    assert system.turns == 1
-    assert system.repaid_tokens == 400
+    with pytest.raises(MissingModel) as exc_info:
+        cost_by_cause(records)
+    msg = str(exc_info.value)
+    assert "record 0" in msg
+    assert "model" in msg
 
 
 # --- P3: non-Anthropic providers are refused outright ------------------------
@@ -417,10 +431,26 @@ def test_a_deepseek_record_refuses_naming_the_conservation_limit(simple_rates):
                    "completion_tokens": 0}),
     ]
     with pytest.raises(NonAnthropicProvider) as exc_info:
-        cost_by_cause(records, "deepseek/deepseek-chat")
+        cost_by_cause(records)
     msg = str(exc_info.value)
     assert "deepseek" in msg
     assert "conservation" in msg
+
+
+def test_a_deepseek_record_among_anthropic_records_names_its_index(simple_rates):
+    """The non-Anthropic refusal names which record offends — a single DeepSeek
+    record slipped into an otherwise-Anthropic capture must point at that record,
+    not at the capture as a whole."""
+    records = [
+        rec("a", body=body("A"), usage=prev_usage(1000, 200)),
+        rec("b", prev_msg="a", provider="deepseek", body=body("B"),
+            usage=usage(cache_read=800, input_tokens=400)),
+    ]
+    with pytest.raises(NonAnthropicProvider) as exc_info:
+        cost_by_cause(records)
+    msg = str(exc_info.value)
+    assert "record 1" in msg
+    assert "deepseek" in msg
 
 
 def test_anthropic_records_are_unaffected_by_the_provider_gate(simple_rates):
@@ -429,7 +459,7 @@ def test_anthropic_records_are_unaffected_by_the_provider_gate(simple_rates):
         rec("a", body=body("A"), usage=prev_usage(1000, 200)),
         rec("b", prev_msg="a", body=body("B"), usage=usage(cache_read=800, input_tokens=400)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
     assert cause_for(b, "system").repaid_tokens == 400
 
 
@@ -452,7 +482,7 @@ def test_a_two_component_break_is_ambiguous_not_charged_to_a_cause(simple_rates)
                   "messages": [{"role": "user", "content": "bye"}]},
             usage=usage(cache_read=800, input_tokens=400)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     assert b.by_cause == []
     assert b.unattributed.turns == 0
@@ -494,7 +524,7 @@ def test_the_three_buckets_are_exhaustive_and_disjoint(simple_rates):
                   "messages": [{"role": "user", "content": "hi"}]},
             usage=usage(cache_read=800, input_tokens=400)),
     ]
-    b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+    b = cost_by_cause(records)
 
     assert len(b.by_cause) == 1
     assert cause_for(b, "system").turns == 1
@@ -526,7 +556,7 @@ def test_three_bucket_overflow_refuses(simple_rates):
             usage=usage(cache_read=200, input_tokens=100, five=50, hour=50)),
     ]
     with pytest.raises(RepaidExceedsCapacity) as exc_info:
-        cost_by_cause(records, "anthropic/claude-sonnet-5")
+        cost_by_cause(records)
     msg = str(exc_info.value)
     assert "1000" in msg and "200" in msg
 
@@ -540,7 +570,7 @@ def test_no_non_cache_read_bucket_refuses(simple_rates):
         rec("b", prev_msg="a", body=body("B"), usage=usage(cache_read=800)),
     ]
     with pytest.raises(RepaidExceedsCapacity) as exc_info:
-        cost_by_cause(records, "anthropic/claude-sonnet-5")
+        cost_by_cause(records)
     msg = str(exc_info.value)
     assert "400" in msg and "0" in msg
 
@@ -565,7 +595,7 @@ def test_every_priced_bucket_satisfies_zero_le_low_le_high(simple_rates):
                 usage=usage(cache_read=400, input_tokens=capacity_input,
                             five=capacity_five, hour=capacity_hour)),
         ]
-        b = cost_by_cause(records, "anthropic/claude-sonnet-5")
+        b = cost_by_cause(records)
         system = cause_for(b, "system")
         assert system.turns == 1, i
         assert system.repaid_tokens == repaid, i

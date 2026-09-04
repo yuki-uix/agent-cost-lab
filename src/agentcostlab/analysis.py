@@ -70,7 +70,11 @@ class RepaidExceedsCapacity(ValueError):
 
 
 class RecordRateMismatch(ValueError):
-    """A record's provider or model does not match the pricing ``model_key``."""
+    """A record's provider/model has no rate-table entry, so it cannot be priced."""
+
+
+class MissingModel(ValueError):
+    """A record has no ``model`` in its ``request_body``; refusing to guess a rate."""
 
 
 class NonAnthropicProvider(ValueError):
@@ -97,23 +101,25 @@ class CauseBreakdown:
     hit_usd_saved: float         # money cache hits saved, reported apart from losses
 
 
-def _pair_by_previous(records: list[dict]) -> list[tuple[dict, dict]]:
+def _pair_by_previous(records: list[dict]) -> list[tuple[dict, dict, int]]:
     """Pair each record with the actual previous message it names.
 
     A capture interleaves sub-conversations on adjacent lines, so "previous
     line" is not the previous message. ``injected_previous_message_id`` is: it
     names the exact ``response_id`` whose request the cache was compared against.
+    The trailing index is the ``curr`` record's position in ``records``, so the
+    caller can fetch that record's per-model rate without re-resolving it.
     """
     by_id = {r.get("response_id"): r for r in records if r.get("response_id")}
-    pairs: list[tuple[dict, dict]] = []
-    for curr in records:
+    pairs: list[tuple[dict, dict, int]] = []
+    for i, curr in enumerate(records):
         ipm = curr.get("injected_previous_message_id")
         if not ipm:
             continue  # first turn of a conversation: nothing to compare
         prev = by_id.get(ipm)
         if prev is None:
             continue  # previous message not in this capture
-        pairs.append((prev, curr))
+        pairs.append((prev, curr, i))
     return pairs
 
 
@@ -126,76 +132,63 @@ def _repaid(prev: dict, curr: dict) -> int:
     return expected - curr_usage.get("cache_read_input_tokens", 0)
 
 
-def _verified_rate(rates: dict[str, Rate], model_key: str) -> Rate:
-    """Return the verified rate for ``model_key``, refusing an unverified one.
+def _rate_for(record: dict, index: int, rates: dict[str, Rate]) -> tuple[str, Rate]:
+    """Resolve the pricing key and verified rate for one record.
 
-    Mirrors the two checks at the top of ``pricing.cost`` (unknown key, unverified
-    entry) so this module refuses to publish a number exactly where ``cost`` does.
+    Each record is priced at its own ``provider`` + ``request_body["model"]``, so
+    a capture may mix models and its dollars are per-record sums — never one
+    average rate over merged tokens. The gate's criterion is now "resolvable and
+    verified" rather than "matches a caller-supplied key"; it refuses in the same
+    two places ``pricing.cost`` does (unknown entry, unverified entry) plus the
+    two things ``cost`` cannot see: a missing ``model`` and a non-Anthropic
+    provider.
+
+    Returns ``(key, rate)`` so the caller can hand the same key straight to
+    ``cost`` / ``_loss_interval`` without re-deriving it.
     """
+    provider = record.get("provider")
+    body = record.get("request_body") or {}
+    model = body.get("model")
+
+    # The conservation identity reads Anthropic's usage keys, so a DeepSeek /
+    # OpenAI record would read 0 on both sides and a real break would be judged
+    # "not broken". Refuse before looking at the rate table: this module cannot
+    # price a non-Anthropic record even when its rate is present and verified.
+    if provider != "anthropic":
+        raise NonAnthropicProvider(
+            f"record {index} is from provider {provider!r}; the cache-break "
+            f"conservation identity (cache_read_input_tokens / "
+            f"cache_creation_input_tokens) is currently only defined for "
+            f"Anthropic's usage shape, so non-Anthropic providers are refused "
+            f"rather than silently misread. Making the identity provider-neutral "
+            f"is a separate task touching ledger and its three call sites."
+        )
+
+    if model is None:
+        raise MissingModel(
+            f"record {index} has no 'model' in its request_body; refusing to "
+            f"guess a rate. A record without a model cannot be priced, and "
+            f"guessing the most common model would silently bill a possibly "
+            f"different model at the wrong rate."
+        )
+
+    key = f"{provider}/{model}"
     try:
-        rate = rates[model_key]
+        rate = rates[key]
     except KeyError as exc:
-        raise KeyError(
-            f"no rate entry for {model_key!r}; known: {sorted(rates)}"
+        raise RecordRateMismatch(
+            f"record {index} has provider {provider!r} and model {model!r} "
+            f"({key!r}), which is not in the rate table; known: {sorted(rates)}. "
+            f"Add the entry to fixtures/pricing.json and set verified: true "
+            f"before this capture can be priced."
         ) from exc
     if not rate.verified:
         raise UnverifiedRate(
-            f"rate for {model_key!r} is unverified (source: {rate.source}). "
+            f"rate for {key!r} is unverified (source: {rate.source}). "
             "Check the official pricing page, fill in the numbers, then set "
             '"verified": true.'
         )
-    return rate
-
-
-def _parse_model_key(model_key: str) -> tuple[str, str]:
-    """Split a pricing key into its provider and model parts.
-
-    ``anthropic/claude-sonnet-5`` -> ``("anthropic", "claude-sonnet-5")``.
-    """
-    provider, _, model = model_key.partition("/")
-    return provider, model
-
-
-def _validate_records(records: list[dict], model_key: str) -> None:
-    """Refuse a capture whose records do not match the pricing ``model_key``.
-
-    One key prices every record, so a mixed-model or mixed-provider capture
-    would be silently billed at the wrong rate, and a mistyped key would price a
-    real capture wrongly with no warning. Every record is checked before any
-    arithmetic, and any mismatch raises rather than skipping the odd record out —
-    skipping would be a quieter kind of under-reporting.
-
-    Also refuses non-Anthropic providers: the conservation identity this module
-    prices from reads Anthropic's usage keys, so a DeepSeek / OpenAI record would
-    read 0 on both sides and a real break would be judged "not broken".
-    """
-    provider_part, model_part = _parse_model_key(model_key)
-    for i, record in enumerate(records):
-        rec_provider = record.get("provider")
-        if rec_provider != provider_part:
-            raise RecordRateMismatch(
-                f"record {i} has provider {rec_provider!r}, which does not match "
-                f"the provider in model_key {model_key!r} ({provider_part!r}); "
-                f"refusing to price a capture under the wrong rate."
-            )
-        body = record.get("request_body") or {}
-        if "model" in body and body["model"] != model_part:
-            raise RecordRateMismatch(
-                f"record {i} has model {body['model']!r} in its request_body, "
-                f"which does not match the model in model_key {model_key!r} "
-                f"({model_part!r}); refusing to price a capture under the wrong "
-                f"rate."
-            )
-        if rec_provider != "anthropic":
-            raise NonAnthropicProvider(
-                f"record {i} is from provider {rec_provider!r}; the cache-break "
-                f"conservation identity (cache_read_input_tokens / "
-                f"cache_creation_input_tokens) is currently only defined for "
-                f"Anthropic's usage shape, so non-Anthropic providers are "
-                f"refused rather than silently misread. Making the identity "
-                f"provider-neutral is a separate task touching ledger and its "
-                f"three call sites."
-            )
+    return key, rate
 
 
 def _loss_interval(
@@ -263,15 +256,22 @@ def _pack(repaid: int, buckets: list[tuple[int, float]], cache_read_rate: float)
     return subtotal / _PER_MTOK
 
 
-def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
+def cost_by_cause(records: list[dict]) -> CauseBreakdown:
     """Attribute every cache break to a cause and price it as an interval.
 
     ``records`` are capture records as written by the proxy (one JSON object per
-    line). ``model_key`` is a pricing key such as ``anthropic/claude-sonnet-5``.
+    line). Each record is priced at its own ``provider`` + ``request_body["model"]``
+    rate, so a mixed-model capture's dollars are the per-record sums — never one
+    average rate over merged tokens.
     """
     rates = load_rates()
-    rate = _verified_rate(rates, model_key)
-    _validate_records(records, model_key)
+    # Resolve every record's rate before any arithmetic. The refusal (unknown
+    # provider/model, unverified rate, missing model, non-Anthropic provider)
+    # fires up front, naming the record, rather than after half the numbers are
+    # computed — a capture that cannot be priced must not be half-priced.
+    resolved = [_rate_for(record, i, rates) for i, record in enumerate(records)]
+    keys = [key for key, _ in resolved]
+    record_rates = [rate for _, rate in resolved]
 
     cause_state = {c: {"turns": 0, "repaid": 0, "low": 0.0, "high": 0.0}
                    for c in COMPONENTS}
@@ -282,13 +282,14 @@ def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
 
     # Money cache hits saved, over every turn that read from cache. Reported
     # apart from the losses: savings and losses are different signposts, and
-    # netting them hides which one moved.
+    # netting them hides which one moved. Each record uses its own rate, so a
+    # mixed-model capture credits each model its own read discount.
     hit_saved = 0.0
-    for record in records:
+    for record, rate in zip(records, record_rates):
         usage = normalise(record.get("provider"), record.get("usage"))
         hit_saved += usage.cache_read * (rate.input_uncached - rate.cache_read) / _PER_MTOK
 
-    for prev, curr in _pair_by_previous(records):
+    for prev, curr, curr_index in _pair_by_previous(records):
         broke = broke_cache(prev, curr)
         if broke is None:
             not_measured += 1
@@ -308,7 +309,8 @@ def cost_by_cause(records: list[dict], model_key: str) -> CauseBreakdown:
 
         d = attribute(prev.get("request_body") or {}, curr.get("request_body") or {})
         usage = normalise(curr.get("provider"), curr.get("usage"))
-        low, high = _loss_interval(repaid, usage, rate, model_key, rates)
+        low, high = _loss_interval(repaid, usage, record_rates[curr_index],
+                                   keys[curr_index], rates)
 
         if d is None or d.suppressed:
             bucket = unattributed

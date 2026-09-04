@@ -345,3 +345,42 @@ def test_both_undecidable_conditions_survive_together():
     assert len(stats["undecidable"]) == 2, stats["undecidable"]
     assert any("identical from here" in u for u in stats["undecidable"])
     assert any("predate" in u for u in stats["undecidable"])
+
+
+# --- the witness rule is the central ledger's, not a local copy ---------------
+
+def _witness_pair(prev_usage, curr_usage):
+    """Two threaded turns with no diagnostics: does the gate witness a break?"""
+    prev = rec(0, rid="msg_p")
+    prev["usage"] = prev_usage
+    curr = rec(1, rid="msg_c", prev="msg_p")
+    curr["usage"] = curr_usage
+    return health._broke_cache(curr, {"msg_p": prev})
+
+
+def test_the_witness_sees_a_partial_break_not_only_a_drop_to_zero():
+    """The old local rule fired only when cache_read fell from non-zero to zero.
+    A prefix that read 5,000 and wrote 800 should be readable as 5,800; reading
+    5,600 loses 200 tokens and is a break the gate has to witness."""
+    assert _witness_pair(
+        {"cache_read_input_tokens": 5000, "cache_creation_input_tokens": 800,
+         "cache_creation": {"ephemeral_5m_input_tokens": 800,
+                            "ephemeral_1h_input_tokens": 0}},
+        {"cache_read_input_tokens": 5600, "cache_creation_input_tokens": 0},
+    ) is True
+
+
+def test_the_witness_sees_a_shrink_in_a_non_anthropic_usage_shape():
+    """The old rule read Anthropic's key names only, so a DeepSeek-shaped usage
+    scored 0 on both sides and no break was ever witnessed."""
+    assert _witness_pair(
+        {"prompt_cache_hit_tokens": 9000, "prompt_cache_miss_tokens": 100},
+        {"prompt_cache_hit_tokens": 2000, "prompt_cache_miss_tokens": 7000},
+    ) is True
+
+
+def test_the_witness_needs_a_demonstrated_break_not_an_absent_measurement():
+    """``broke_cache`` returns None when a pair cannot be measured. A witness
+    must be a break that happened, never a measurement that did not."""
+    assert _witness_pair({}, {"cache_read_input_tokens": 100}) is False
+    assert _witness_pair({"foo": 1}, {"foo": 2}) is False

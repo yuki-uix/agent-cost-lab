@@ -6,15 +6,14 @@ Reads ``data/raw/capture.jsonl`` and, for every record whose
 ``attribute()`` over that pair and compares the result against the official
 "did the cache break" signal.
 
-The official signal comes from whichever source the capture actually recorded:
+Two ground truths, two questions, deliberately not folded together (collapsing
+them once scored "the API cannot tell you" as "nothing changed"):
 
-*   ``diagnostics.cache_miss_reason.type`` (Anthropic's ``*_changed`` reasons)
-    when present;
-*   otherwise ``usage.cache_read_input_tokens > 0`` — a turn that reads tokens
-    from cache did not break the prefix, so it is "no divergence". This is the
-    signal available in the 75-record Claude Code capture: it never breaks
-    (``cache_read_input_tokens`` climbs monotonically), so every comparable turn
-    is "no divergence".
+*   *whether* the cache broke — ``ledger.broke_cache``, a conservation identity
+    over provider-reported usage (``curr.cache_read < prev.cache_read +
+    prev.cache_write``);
+*   *which component* broke — ``diagnostics.cache_miss_reason.type`` (Anthropic's
+    ``*_changed`` reasons), only when the API named one.
 
 The segment order is a hypothesis, so this still tries *every* permutation of
 ``COMPONENTS`` and reports which agrees best. Suppression ("did the cache

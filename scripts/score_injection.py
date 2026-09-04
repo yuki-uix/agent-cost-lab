@@ -8,8 +8,13 @@ reasoning:
   constructed rather than measured, and the *only* source with an opinion below
   component level (which tool, which message index, which field).
 * **B — ``ledger.broke_cache``.** A conservation identity over provider-reported
-  usage: ``curr.cache_read == prev.cache_read + prev.cache_creation``. It shares
-  no code with the attributor by design; see that module's docstring.
+  usage: a break is a *shortfall*, ``curr.cache_read < prev.cache_read +
+  prev.cache_write``, where the write term sums all three write buckets of the
+  normalised ``Usage``. Reading *more* than expected is not a break — on an
+  implicit-cache provider the write side is never reported, so a growing prefix
+  reads "more than expected" every healthy turn and only shrinkage counts. Which
+  provider's keys to read is decided by the usage's *shape*, not its label. It
+  shares no code with the attributor by design; see that module's docstring.
 * **C — ``diagnostics.cache_miss_reason``.** Anthropic's own verdict, component
   level only, and absent on providers that do not implement the beta.
 

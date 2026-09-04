@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from agentcostlab.ledger import broke_cache  # noqa: E402
 from agentcostlab.proxy import _lineage_key  # noqa: E402
 
 
@@ -27,17 +28,23 @@ def _broke_cache(record: dict, by_response_id: dict) -> bool:
     """Did this turn demonstrably lose the cache, judged only by the ledger?
 
     Independent of `diagnostics`, so it can be used as a witness against it.
-    Requires the predecessor to be in this capture and to have read cached
-    tokens: without that there is nothing to have lost. An empty or absent
-    usage is "not recorded", not "read zero" — record 46 of the 2026-08-18
-    capture has `usage: {}` and is not a cache break.
+
+    Defers to `ledger.broke_cache` rather than restating the rule. This function
+    used to carry its own copy — "cache_read fell from non-zero to zero" — which
+    could not see a *partial* break (prev read 5,000 + wrote 800, this turn reads
+    5,600: 200 tokens lost, old rule says fine) and could not see any break at all
+    on a provider whose usage does not use Anthropic's key names. A capture whose
+    real breaks went unwitnessed would leave this gate reporting "undecidable"
+    where it should have failed.
+
+    `is True` on purpose: `broke_cache` returns `None` when the pair is not
+    measurable (missing predecessor, empty usage, unrecognised usage shape), and
+    a witness has to be a demonstrated break, never an absence of measurement.
     """
     prev = by_response_id.get(record.get("injected_previous_message_id"))
-    usage, prev_usage = record.get("usage"), (prev or {}).get("usage")
-    if not usage or not prev_usage:
+    if prev is None:
         return False
-    return (usage.get("cache_read_input_tokens", 0) == 0
-            and prev_usage.get("cache_read_input_tokens", 0) > 0)
+    return broke_cache(prev, record) is True
 
 
 def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:

@@ -41,7 +41,27 @@ _PER_MTOK = 1_000_000
 
 
 def _load(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    """Parse a capture file, one JSON object per line.
+
+    Every consumer assumes each row is a record (a dict it can ``.get`` from), so
+    a line that is valid JSON but not an object — a bare number, string, or list —
+    is rejected here with its line number rather than left to surface as an
+    ``AttributeError`` three calls deeper. ``ValueError`` covers both this and the
+    ``json.JSONDecodeError`` a malformed line raises (it is a ``ValueError``
+    subclass), so ``run_diagnose`` catches them the same way.
+    """
+    rows: list[dict] = []
+    for n, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        if not isinstance(obj, dict):
+            raise ValueError(
+                f"line {n} is not a capture record (a JSON object): "
+                f"got {type(obj).__name__}"
+            )
+        rows.append(obj)
+    return rows
 
 
 def _usd(x: float) -> str:
@@ -107,13 +127,21 @@ def _model_stats(records: list[dict], rates) -> list[dict]:
         # from *that* integer — otherwise "median prefix 100 tokens" is priced at
         # 100.5 and the printed number cannot be rederived. Round once, here, and
         # price from the same integer that is displayed.
-        typical = int(round(_median(prefixes.get(model, []))))
-        # If the prefix broke once, the typical prefix length would be re-billed
-        # somewhere other than the read rate. This is a hypothetical break with no
-        # real usage bucket to sweep, so it is a pure rate interval — cheapest
-        # bucket (uncached) to most expensive (1h write) — never a point estimate.
-        one_break_low = typical * (rate.input_uncached - rate.cache_read) / _PER_MTOK
-        one_break_high = typical * (rate.cache_write_1h - rate.cache_read) / _PER_MTOK
+        samples = prefixes.get(model, [])
+        # No cache-read sample means no observed prefix to reason about, so there
+        # is nothing to say a break would have cost. A median of [] is 0, and a
+        # "one break ~ $0.00 (median prefix 0 tokens)" line is a fabricated
+        # zero-cost estimate, not a measurement — omit it entirely.
+        if samples:
+            typical = int(round(_median(samples)))
+            # A hypothetical break has no real usage bucket to sweep, so it is a
+            # pure rate interval — cheapest bucket (uncached) to most expensive
+            # (1h write) — never a point estimate.
+            one_break_low = typical * (rate.input_uncached - rate.cache_read) / _PER_MTOK
+            one_break_high = typical * (rate.cache_write_1h - rate.cache_read) / _PER_MTOK
+        else:
+            typical = None
+            one_break_low = one_break_high = None
         stats.append({
             "model": model,
             "read_tokens": read_tokens,
@@ -168,10 +196,11 @@ def diagnose_text(records: list[dict]) -> str:
             f"  {s['model']:<18s} {s['read_tokens']:,} read tokens"
             f" -> {_usd(s['saved'])} saved"
         )
-        lines.append(
-            f"    one break ~ {_usd(s['one_break_low'])} – {_usd(s['one_break_high'])}"
-            f" (median prefix {s['typical_prefix']:,} tokens)"
-        )
+        if s["one_break_low"] is not None:
+            lines.append(
+                f"    one break ~ {_usd(s['one_break_low'])} – {_usd(s['one_break_high'])}"
+                f" (median prefix {s['typical_prefix']:,} tokens)"
+            )
 
     lines.append("")
     lines.append("Cause breakdown  (attribution NOT yet validated on a real break"
@@ -238,7 +267,7 @@ def run_diagnose(path: Path) -> tuple[int, str]:
 
     try:
         rows = _load(path)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         return 1, (f"could not read {path}: {exc}\n"
                    f"Next step: check the file is the JSONL a capture writes "
                    f"(one JSON object per line); re-record with 'agentcostlab "

@@ -321,3 +321,32 @@ def test_a_healthy_zero_break_capture_is_still_a_success(rates, tmp_path):
     code, text = cli.run_diagnose(p)
     assert code == 0
     assert "$" in text
+
+
+def test_a_non_record_line_is_refused_not_a_traceback(tmp_path):
+    """P2-a: every line must be a JSON object. A line that is valid JSON but a
+    bare number / string / list would surface as an AttributeError three calls
+    deeper; run_diagnose must refuse it with a next step, and check every line."""
+    for name, raw in [("number", "42\n"),
+                      ("list", "[1,2,3]\n"),
+                      ("record_then_junk",
+                       '{"provider":"anthropic","usage":{"cache_read_input_tokens":5}}\n7\n')]:
+        p = tmp_path / f"{name}.jsonl"
+        p.write_text(raw)
+        code, text = cli.run_diagnose(p)
+        assert code != 0, f"{name}: non-record line was not refused"
+        assert "Next step" in text, f"{name}: refusal without a next step"
+
+
+def test_no_cache_read_samples_omits_the_one_break_estimate(rates):
+    """P2-b: a model with usage but no cache-read samples has no observed prefix,
+    so 'one break ~ $0.00 (median prefix 0 tokens)' is a fabricated zero-cost
+    estimate. The estimate is omitted; the model's read/saved row still stands."""
+    stats = cli._model_stats(
+        [rec("a", usage_=usage(cache_read=0, input_tokens=500))], SIMPLE)
+    (s,) = stats
+    assert s["one_break_low"] is None and s["one_break_high"] is None
+    assert s["typical_prefix"] is None
+    # and the rendered text carries no zero-dollar one-break line
+    text = cli.diagnose_text([rec("a", usage_=usage(cache_read=0, input_tokens=500))])
+    assert "one break" not in text

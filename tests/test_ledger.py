@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 
 from agentcostlab import providers
+import pytest
+
 from agentcostlab.ledger import SHAPE_KEYS, _normalise, broke_cache
 
 
@@ -298,3 +300,33 @@ def test_compat_endpoint_is_measured_not_refused():
 def test_compat_endpoint_shrink_is_a_break():
     records = _compat_records()
     assert broke_cache(records[41], records[42]) is True
+
+
+# --- malformed usage is refused, never crashed on and never misread ----------
+
+@pytest.mark.parametrize("bad, why", [
+    ("cache_read_input_tokens", "usage is a bare string; `key in str` is a substring test"),
+    (["cache_read_input_tokens"], "usage is a list"),
+    (42, "usage is a number"),
+    ({"cache_read_input_tokens": "10", "cache_creation_input_tokens": 0}, "count is a string"),
+    ({"cache_read_input_tokens": {"a": 1}, "cache_creation_input_tokens": 0}, "count is an object"),
+    ({"cache_read_input_tokens": -5, "cache_creation_input_tokens": 0}, "count is negative"),
+    ({"cache_read_input_tokens": True, "cache_creation_input_tokens": 0}, "count is a bool"),
+])
+def test_malformed_usage_is_not_measurable(bad, why):
+    """`usage` arrives from JSON and is not guaranteed to be an object, nor its
+    counts to be numbers. Every one of these used to either raise out of
+    `broke_cache` — breaking `score_injection` and the health gate — or, for the
+    negative count, sail through as an ordinary "not broken", which is the silent
+    misread this module exists to refuse."""
+    record = {"provider": "anthropic", "usage": bad}
+    assert broke_cache(record, record) is None, why
+
+
+def test_a_well_formed_pair_is_still_measured():
+    """The guard must refuse malformed data without refusing real data."""
+    prev = {"usage": {"cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200,
+                      "cache_creation": {"ephemeral_5m_input_tokens": 200,
+                                         "ephemeral_1h_input_tokens": 0}}}
+    curr = {"usage": {"cache_read_input_tokens": 1100, "cache_creation_input_tokens": 0}}
+    assert broke_cache(prev, curr) is True

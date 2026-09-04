@@ -11,6 +11,8 @@ checked against, so it must not share the reasoning it is checking.
 """
 from __future__ import annotations
 
+from dataclasses import fields
+
 from .providers import EXTRACTORS, Usage, normalise
 
 # The keys that identify each provider's usage shape. They must be mutually
@@ -90,10 +92,48 @@ def _normalise(record: dict) -> Usage | None:
     (``cost_by_cause``), not which keys to read.
     """
     usage = record.get("usage")
-    if not usage:
+    # `usage` comes from JSON and is not guaranteed to be an object. `key in x`
+    # is a *substring* test on a string, so a bare `usage: "cache_read_input_
+    # tokens"` would match the anthropic shape and then blow up inside
+    # `normalise`. Refusing here keeps the documented contract: unmeasurable is
+    # None, never an exception the callers have to know about.
+    if not isinstance(usage, dict) or not usage:
         return None
     matches = [provider for provider in EXTRACTORS
                if any(key in usage for key in SHAPE_KEYS.get(provider, ()))]
     if len(matches) != 1:
         return None
-    return normalise(matches[0], usage)
+    try:
+        counted = normalise(matches[0], usage)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return counted if _counts_are_sane(counted) else None
+
+
+def _counts_are_sane(usage: Usage) -> bool:
+    """Every token count is a non-negative whole number.
+
+    A count that is a string, a nested object, or negative is malformed data, not
+    a measurement. Left unchecked it either raises inside the arithmetic (a
+    string count crashes `expected + ...`) or, worse, sails through: a
+    `cache_read_input_tokens: -5` used to read as a perfectly ordinary "not
+    broken", which is the silent misread this module is built to refuse.
+
+    Driven by the dataclass fields rather than a hand-written list, so a count
+    added to `Usage` later is covered without anyone remembering to come back.
+    `bool` is excluded deliberately — it is a subclass of `int`, and `True` is
+    not a token count.
+
+    A key present with an explicit `null` is *not* refused here: `providers.
+    normalise` coerces it to 0, and a provider reporting no cached tokens for a
+    turn where caching did not apply is reading zero, not failing to measure.
+    Overriding that in the ledger alone would leave it calling a turn
+    unmeasurable while `pricing.cost` happily bills it at $0. Considered and
+    left alone, not overlooked.
+    """
+    for field in fields(usage):
+        if field.type in ("int", int):
+            value = getattr(usage, field.name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return False
+    return True

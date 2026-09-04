@@ -439,3 +439,35 @@ def test_every_object_shape_key_declares_what_it_must_carry():
                     f"{provider}.{key} is an OBJECT shape key that requires no "
                     f"counts; an empty container would identify the shape and "
                     f"then read as zero")
+
+
+# --- what the shortfall rule can and cannot see on an implicit cache ---------
+
+def test_an_every_turn_fault_is_invisible_without_a_reported_write():
+    """E4's I1 changes the system prompt every turn, so an implicit-cache
+    provider never caches anything and there is no baseline to fall short of.
+
+    The rule needs `prev` to have cached something. Anthropic reports the write,
+    so `expected` is non-zero even when nothing was read back and the break is
+    caught; DeepSeek reports no write, `expected` collapses to 0, and `0 < 0` is
+    false. The campaign therefore has to run I1 on Anthropic — pinned here so the
+    constraint cannot quietly drift out of `docs/e4-tasks.md` §4."""
+    anthropic = {"usage": {"cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 30000,
+                           "cache_creation": {"ephemeral_5m_input_tokens": 30000,
+                                              "ephemeral_1h_input_tokens": 0}}}
+    implicit = {"usage": {"cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0}}
+    assert broke_cache(anthropic, anthropic) is True
+    assert broke_cache(implicit, implicit) is False
+
+
+def test_a_one_shot_fault_is_visible_on_an_implicit_cache():
+    """I3 and I4 fire once, after several turns of normal caching, so the prefix
+    has grown to fall from. That is why they can run on the cheap arm while I1
+    cannot."""
+    cached = {"usage": {"cache_read_input_tokens": 50000,
+                        "cache_creation_input_tokens": 0}}
+    broken = {"usage": {"cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0}}
+    assert broke_cache(cached, broken) is True

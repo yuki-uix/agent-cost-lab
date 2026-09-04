@@ -34,6 +34,7 @@ import argparse
 import json
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -97,42 +98,58 @@ def official(record: dict) -> str | None:
     return kind.removesuffix("_changed")
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("path", type=Path)
-    args = ap.parse_args()
+def attributed_component(prev_body: dict, curr_body: dict) -> str | None:
+    """The component the attributor blames, or ``None`` when it found no break.
 
-    records = load(args.path)
+    ``attribute`` returns a single ``Divergence | None`` — the *first* divergence
+    in the swept segment order — not a collection of them. A ``suppressed``
+    divergence is a text change in the non-cached write tail, visible but not a
+    cache break, so it is not a blame either.
+    """
+    result = attribute(prev_body, curr_body)
+    if result is None or result.suppressed:
+        return None
+    return result.component
+
+
+@dataclass
+class Score:
+    """The whole three-way comparison over one capture, ready to print."""
+
+    fault: str
+    expected: str | None
+    tally: Counter
+    disagreements: list[str]
+    fired_turns: int
+
+
+def score(records: list[dict]) -> Score:
+    """Run the three-way comparison over every threaded pair.
+
+    Precondition: at least one record declares an ``injection`` arm — ``main``
+    refuses the capture before this is called. Disagreements are *findings*,
+    accumulated rather than reconciled.
+    """
     labels = {json.dumps(r.get("injection"), sort_keys=True) for r in records if r.get("injection")}
-    if not labels:
-        print(
-            f"{args.path}: no `injection` field on any record. This capture does not "
-            "declare a campaign arm and cannot be scored as one. Re-capture with "
-            "AGENTCOSTLAB_INJECT set (use i0 for the baseline).",
-            file=sys.stderr,
-        )
-        return 2
-
     fault = json.loads(next(iter(labels)))["id"]
     expected = EXPECTED_COMPONENT.get(fault)
-    print(f"capture : {args.path}")
-    print(f"fault   : {fault}   expected component: {expected or '(none — baseline)'}")
-    print(f"records : {len(records)}")
 
     tally = Counter()
     disagreements: list[str] = []
+    fired_turns = 0
 
     for prev, curr in pairs(records):
+        fired = bool((curr.get("injection") or {}).get("applied"))
+        if fired:
+            fired_turns += 1
+
         b = ledger_broke(prev, curr)          # B
         if b is None:
             tally["B: not measured"] += 1
             continue
         tally["B: broke" if b else "B: intact"] += 1
 
-        result = attribute(prev.get("request_body"), curr.get("request_body"))
-        divs = [d for d in getattr(result, "divergences", result) if not d.suppressed]
-        blamed = divs[0].component if divs else None
-        fired = bool((curr.get("injection") or {}).get("applied"))
+        blamed = attributed_component(prev.get("request_body"), curr.get("request_body"))
 
         # A vs attributor, only on turns where the fault actually fired.
         if fired:
@@ -158,13 +175,45 @@ def main() -> int:
                     f"attributed {blamed}, ledger broke={b}"
                 )
 
-    print("\ntally")
-    for k in sorted(tally):
-        print(f"  {k:<34} {tally[k]}")
+    return Score(fault=fault, expected=expected, tally=tally,
+                 disagreements=disagreements, fired_turns=fired_turns)
 
-    if disagreements:
-        print(f"\ndisagreements ({len(disagreements)}) — these belong in the report, not smoothed over")
-        for line in disagreements:
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("path", type=Path)
+    args = ap.parse_args()
+
+    records = load(args.path)
+    labels = {json.dumps(r.get("injection"), sort_keys=True) for r in records if r.get("injection")}
+    if not labels:
+        print(
+            f"{args.path}: no `injection` field on any record. This capture does not "
+            "declare a campaign arm and cannot be scored as one. Re-capture with "
+            "AGENTCOSTLAB_INJECT set (use i0 for the baseline).",
+            file=sys.stderr,
+        )
+        return 2
+
+    result = score(records)
+    print(f"capture : {args.path}")
+    print(f"fault   : {result.fault}   expected component: {result.expected or '(none — baseline)'}")
+    print(f"records : {len(records)}")
+
+    print("\ntally")
+    for k in sorted(result.tally):
+        print(f"  {k:<34} {result.tally[k]}")
+
+    if result.expected is not None and result.fired_turns == 0:
+        print(
+            "\nfault never fired: no turn in this capture recorded "
+            "`injection.applied: true`, so the arm's fault was never armed and "
+            "there is nothing to attribute."
+        )
+
+    if result.disagreements:
+        print(f"\ndisagreements ({len(result.disagreements)}) — these belong in the report, not smoothed over")
+        for line in result.disagreements:
             print(line)
     else:
         print("\nno pairwise disagreement")

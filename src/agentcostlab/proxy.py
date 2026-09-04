@@ -21,7 +21,7 @@ from pathlib import Path
 import httpx
 
 from . import inject
-from .codec import serialise
+from .codec import serialise, strip_cache_control
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -97,7 +97,7 @@ def _lineage_key(body: dict) -> str:
     """
     messages = body.get("messages")
     first = messages[0] if isinstance(messages, list) and messages else None
-    raw = json.dumps(first, ensure_ascii=False, sort_keys=True, default=str)
+    raw = json.dumps(strip_cache_control(first), ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 

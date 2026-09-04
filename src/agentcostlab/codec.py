@@ -22,3 +22,29 @@ def serialise(value: object) -> bytes:
     load-bearing, not style.
     """
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+
+
+def strip_cache_control(value: object) -> object:
+    """Drop every ``cache_control`` key, at every depth and every block type.
+
+    ``cache_control`` marks a cache-*write* breakpoint, not conversation content.
+    Claude Code walks that breakpoint down the conversation every turn, so an
+    identity that hashes ``messages[0]`` verbatim splits one conversation into
+    several as the marker moves between blocks. Stripping it everywhere — top
+    level, nested inside a ``content`` array, on ``tool_use`` / ``tool_result``
+    blocks alike — is what keeps "the same first message" the same first message.
+
+    This is deliberately broader than ``attribute._normalise_content``, which
+    strips the marker from ``text`` blocks only. The two answer different
+    questions: for identity, where the marker sits is irrelevant; for divergence
+    attribution, it is the evidence itself.
+    """
+    if isinstance(value, dict):
+        return {
+            key: strip_cache_control(item)
+            for key, item in value.items()
+            if key != "cache_control"
+        }
+    if isinstance(value, list):
+        return [strip_cache_control(item) for item in value]
+    return value

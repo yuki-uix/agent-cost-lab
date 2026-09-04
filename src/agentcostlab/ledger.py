@@ -13,16 +13,21 @@ from __future__ import annotations
 
 from .providers import EXTRACTORS, Usage, normalise
 
-# The keys that identify each provider's usage shape. They are disjoint on
-# purpose: a payload that ``normalise`` would read as all-zeros — because its
-# keys belong to a *different* provider than the label claims — is refused as
-# "not measured" rather than read as "not broken". ``normalise`` reads exactly
-# these keys, so a usage dict carrying none of them has no cache signal for that
-# provider.
+# The keys that identify each provider's usage shape. They must be mutually
+# exclusive: ``_normalise`` resolves a usage by which provider's keys it carries,
+# so a payload carrying two providers' keys has an ambiguous shape and is refused
+# rather than guessed. ``normalise`` reads exactly these keys, so a usage dict
+# carrying none of them has no cache signal for any provider and is refused as
+# "not measured" rather than read as "not broken".
+#
+# OpenAI is keyed by ``prompt_tokens_details`` alone, not ``prompt_tokens``:
+# DeepSeek's native usage also reports ``prompt_tokens`` (it equals hit + miss),
+# so ``prompt_tokens`` cannot tell the two apart. ``prompt_tokens_details`` is
+# OpenAI-only.
 SHAPE_KEYS: dict[str, tuple[str, ...]] = {
     "anthropic": ("cache_read_input_tokens", "cache_creation_input_tokens"),
     "deepseek": ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"),
-    "openai": ("prompt_tokens", "prompt_tokens_details"),
+    "openai": ("prompt_tokens_details",),
 }
 
 
@@ -57,9 +62,11 @@ def broke_cache(prev: dict, curr: dict) -> bool | None:
     An absent or empty ``usage`` is "not measured", never "read zero". Record 46
     of the 2026-08-18 capture carries ``usage: {}`` and is not a cache break; a
     probe that read it as one invented a witness out of a missing measurement.
-    The same goes for a usage whose shape does not match its provider label: a
-    ``provider="anthropic"`` record whose keys are DeepSeek's would normalise to
-    all zeros, reading as "not broken" when it is simply not measurable.
+    The same goes for a usage that matches no provider's shape, or several: it
+    has no unambiguous cache signal, so it is "not measured" rather than read as
+    "not broken". The provider label does not enter this decision — the shape
+    alone says how to read the numbers, and which provider's rates to charge is
+    ``cost_by_cause``'s separate question.
     """
     prev_usage = _normalise(prev)
     curr_usage = _normalise(curr)
@@ -72,17 +79,21 @@ def broke_cache(prev: dict, curr: dict) -> bool | None:
 def _normalise(record: dict) -> Usage | None:
     """``record``'s usage as a ``Usage``, or ``None`` when it is not measurable.
 
-    Guards the usage's *shape*, not the provider label. A record labelled
-    ``anthropic`` whose usage keys belong to another provider is a silent misread
-    if normalised as anthropic (both cache fields would read 0), so it is refused
-    as not-measured rather than read as "not broken".
+    Resolves the usage by its *shape*, not its provider label. Each registered
+    provider owns a distinctive set of keys; the usage is read with the one
+    provider whose shape it matches. Exactly one match -> read it; zero matches
+    -> no cache signal, not measured; several matches -> ambiguous shape, not
+    measured (the shape registry is meant to be mutually exclusive, and guessing
+    which colliding provider to read would pass a misread off as a read).
+
+    The label is irrelevant here: it decides which provider's rates to charge
+    (``cost_by_cause``), not which keys to read.
     """
     usage = record.get("usage")
     if not usage:
         return None
-    provider = record.get("provider") or "anthropic"
-    if provider not in EXTRACTORS:
+    matches = [provider for provider in EXTRACTORS
+               if any(key in usage for key in SHAPE_KEYS.get(provider, ()))]
+    if len(matches) != 1:
         return None
-    if not any(key in usage for key in SHAPE_KEYS.get(provider, ())):
-        return None
-    return normalise(provider, usage)
+    return normalise(matches[0], usage)

@@ -330,3 +330,60 @@ def test_a_well_formed_pair_is_still_measured():
                                          "ephemeral_1h_input_tokens": 0}}}
     curr = {"usage": {"cache_read_input_tokens": 1100, "cache_creation_input_tokens": 0}}
     assert broke_cache(prev, curr) is True
+
+
+# --- falsy counts must not survive `or 0` and invent a break -----------------
+
+@pytest.mark.parametrize("falsy", [None, False, 0.0, "", [], {}])
+def test_an_explicit_falsy_count_is_refused_not_read_as_zero(falsy):
+    """The extractors read counts as ``u.get(k, 0) or 0``, which cannot tell
+    "absent" from "present but falsy". Validated only *after* normalisation,
+    every one of these became a clean 0 — and against a previous turn that read
+    1,000 tokens, a 0 is a *total* break the capture never had. Malformed data
+    inventing a witness is worse than the crashes the earlier guard replaced.
+
+    The previous round parametrised `True` alone, which is truthy and so never
+    exercised the `or 0` path at all."""
+    prev = {"usage": {"cache_read_input_tokens": 1000, "cache_creation_input_tokens": 0}}
+    curr = {"usage": {"cache_read_input_tokens": falsy, "cache_creation_input_tokens": 0}}
+    assert broke_cache(prev, curr) is None
+
+
+def test_a_falsy_count_nested_in_the_ttl_breakdown_is_also_refused():
+    """`cache_creation`'s ephemeral counts feed the write term, so the guard has
+    to descend into it — but only into keys that are not counts themselves."""
+    prev = {"usage": {"cache_read_input_tokens": 100, "cache_creation_input_tokens": 50,
+                      "cache_creation": {"ephemeral_5m_input_tokens": False,
+                                         "ephemeral_1h_input_tokens": 0}}}
+    curr = {"usage": {"cache_read_input_tokens": 200, "cache_creation_input_tokens": 0}}
+    assert broke_cache(prev, curr) is None
+
+
+def test_an_absent_count_is_still_zero_not_a_refusal():
+    """Absent means the provider did not report it, and 0 is the honest reading.
+    A guard that refused omissions would refuse most real payloads."""
+    prev = {"usage": {"cache_read_input_tokens": 1000, "cache_creation_input_tokens": 0}}
+    curr = {"usage": {"cache_creation_input_tokens": 0, "input_tokens": 5}}
+    assert broke_cache(prev, curr) is True
+
+
+def test_every_count_key_is_named_tokens():
+    """The raw guard keys on the ``*_tokens`` suffix. That is an assumption about
+    how the extractors name things, so it is asserted rather than left tacit: a
+    count added under another name would slip past the guard silently."""
+    counts = {
+        # anthropic, including the nested TTL breakdown
+        "cache_read_input_tokens", "cache_creation_input_tokens",
+        "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens",
+        "input_tokens", "output_tokens",
+        # deepseek
+        "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_tokens",
+        # openai, including the nested details
+        "prompt_tokens", "cached_tokens", "cache_write_tokens",
+    }
+    unguarded = {k for k in counts if not k.endswith("_tokens")}
+    assert not unguarded, f"count keys the raw guard would not check: {unguarded}"
+    # and the containers around them must NOT look like counts, or the guard
+    # would reject the object it needs to descend into
+    for container in ("cache_creation", "prompt_tokens_details", "output_tokens_details"):
+        assert not container.endswith("_tokens")

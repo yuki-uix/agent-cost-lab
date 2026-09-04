@@ -103,11 +103,50 @@ def _normalise(record: dict) -> Usage | None:
                if any(key in usage for key in SHAPE_KEYS.get(provider, ()))]
     if len(matches) != 1:
         return None
+    if not _raw_counts_are_sane(usage):
+        return None
     try:
         counted = normalise(matches[0], usage)
     except (AttributeError, TypeError, ValueError):
         return None
     return counted if _counts_are_sane(counted) else None
+
+
+def _raw_counts_are_sane(usage: dict) -> bool:
+    """Every token count *present* in the raw payload is a non-negative whole number.
+
+    This has to run **before** `normalise`, because the extractors read counts as
+    ``u.get(key, 0) or 0`` — which cannot tell "absent" from "present but falsy".
+    An explicit ``null``, ``false``, ``0.0``, ``""``, ``[]`` or ``{}`` is coerced
+    to 0 and then passes a post-normalisation check as a perfectly ordinary zero.
+    That is not academic: against a previous turn that read 1,000 tokens, any of
+    those values reads as a *total* break the capture never had — malformed data
+    inventing a witness, which is worse than the crashes this guard replaced.
+
+    Absent is still fine and still means 0: a provider that omits a field did not
+    report it, and 0 is the honest reading. It is the *explicit* non-integer that
+    is malformed — DeepSeek, for one, documents both cache token fields as
+    required integers rather than nullable.
+
+    The rule keys on the name: every count the extractors read is spelled
+    ``*_tokens`` (twelve of them across the three providers, nested ones
+    included), while the non-count fields around them — ``service_tier``,
+    ``cache_creation``, ``prompt_tokens_details`` — are not. A count added under
+    some other name would slip past; `test_every_count_key_is_named_tokens` keeps
+    that assumption visible rather than tacit.
+    """
+    for key, value in usage.items():
+        # The suffix decides first: a `*_tokens` key holding an object is
+        # malformed data, not a container to descend into. Checking `isinstance
+        # dict` first let `cache_read_input_tokens: {}` recurse into an empty
+        # dict, come back "sane", and then normalise to 0.
+        if key.endswith("_tokens"):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return False
+        elif isinstance(value, dict):
+            if not _raw_counts_are_sane(value):
+                return False
+    return True
 
 
 def _counts_are_sane(usage: Usage) -> bool:

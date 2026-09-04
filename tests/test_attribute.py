@@ -548,10 +548,9 @@ def test_the_real_partial_break_is_attributed():
     broke = []
     for curr in rows:
         prev = by_id.get(curr.get("injected_previous_message_id"))
-        usage, prev_usage = curr.get("usage"), (prev or {}).get("usage")
-        if not usage or not prev_usage:
+        if prev is None:
             continue
-        if broke_cache(prev, curr):
+        if broke_cache(prev, curr) is True:
             broke.append((prev, curr))
 
     assert len(broke) == 1, f"expected exactly the one known break, found {len(broke)}"
@@ -574,11 +573,12 @@ def test_neither_capture_gains_a_false_break():
         by_id = {r["response_id"]: r for r in rows if r.get("response_id")}
         for curr in rows:
             prev = by_id.get(curr.get("injected_previous_message_id"))
-            usage, prev_usage = curr.get("usage"), (prev or {}).get("usage")
-            if not usage or not prev_usage:
+            if prev is None:
+                continue
+            ledger_broke = broke_cache(prev, curr)
+            if ledger_broke is None:
                 continue
             checked += 1
-            ledger_broke = broke_cache(prev, curr)
             d = attribute(prev["request_body"], curr["request_body"])
             assert (d is not None and not d.suppressed) == ledger_broke, \
                 f"{name}: attributor and ledger disagree"

@@ -332,17 +332,20 @@ def test_missing_usage_is_not_measured_not_a_break(simple_rates):
     assert b.disputed_turns == 0
 
 
-def test_reading_more_than_expected_is_an_anomaly_not_a_negative_loss(simple_rates):
-    """``repaid < 0`` means the instrument saw more than the ledger predicts. It
-    is never clamped to zero and never reported as a negative loss."""
+def test_reading_more_than_expected_is_not_a_break_nor_an_anomaly(simple_rates):
+    """``curr.cache_read > prev.cache_read + prev.cache_write`` is an over-read,
+    not a break: the shortfall criterion (AC4) sees no loss. It is never dumped
+    in ``not_measured`` nor reported as a negative loss — the attributor's
+    divergence is recorded as a dispute, counted only."""
     records = [
         rec("a", body=body("A"), usage=prev_usage(1000, 100)),
         rec("b", prev_msg="a", body=body("B"), usage=usage(cache_read=1200)),
     ]
     b = cost_by_cause(records)
-    assert b.not_measured_turns == 1
+    assert b.not_measured_turns == 0
     assert not b.by_cause
     assert b.unattributed.repaid_tokens == 0
+    assert b.disputed_turns == 1
 
 
 # --- hit_usd_saved is reported apart from losses -----------------------------

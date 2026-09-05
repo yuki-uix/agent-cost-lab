@@ -13,9 +13,25 @@
 #                                    then kill it and wait until the port is
 #                                    actually released before returning
 #
-# Both return non-zero and print the reason to stderr on failure, so a caller
-# running under `set -e` aborts the whole capture rather than recording into
-# the wrong file.
+# Both print the reason to stderr when they cannot do what was asked. Their
+# exit codes are a contract for the caller (scripts/capture.sh, and E4's arm
+# runner which sources this file from outside the repo and can only read this
+# comment):
+#
+#   acl_proxy_stop returns
+#     0  the proxy was stopped, or nothing was running and no pidfile remained
+#     2  the port is free and only the pidfile remains — the proxy is already
+#        gone. This is a warning, not a stop that could not be performed: no
+#        process is writing the capture any more, so the caller must NOT abort
+#        and should still run the health gate.
+#     1  the port is held by a process that is not the recorded PID, or the
+#        port could not be released after the kill. Acting would kill a process
+#        that was never verified, so the caller MUST abort the capture without
+#        running the health gate (the capture may still be growing).
+#
+#   acl_proxy_start returns 0 on success and 1 on any failure. It has no
+#   warning tier: a non-zero always means abort, so no per-code contract is
+#   needed there.
 
 PORT="${PORT:-8787}"
 PIDFILE="${PIDFILE:-.capture.pid}"
@@ -82,12 +98,20 @@ acl_proxy_stop() {
     fi
 
     if [ "$listener" != "$pid" ]; then
-        rm -f "$PIDFILE"
         if _port_free; then
+            # Proxy already gone: the port is free and only the pidfile is left.
+            # Clean the residue and report it as a warning (exit 2), not a stop
+            # that could not be performed — the caller should still run the
+            # health gate, because nothing is writing the capture any more.
+            rm -f "$PIDFILE"
             echo "pidfile $PIDFILE named pid $pid, but port $PORT is free; not killing (proxy already gone)" >&2
-        else
-            echo "pidfile $PIDFILE named pid $pid, but port $PORT is held by pid $listener; not killing" >&2
+            return 2
         fi
+        # The port is held by a process that is not the one we recorded. Acting
+        # would kill a process we never verified, so abort (exit 1). The pidfile
+        # is kept on purpose: it names the owner we last recorded, which is the
+        # one piece of state that explains the collision to whoever debugs it.
+        echo "pidfile $PIDFILE named pid $pid, but port $PORT is held by pid $listener; not killing" >&2
         return 1
     fi
 

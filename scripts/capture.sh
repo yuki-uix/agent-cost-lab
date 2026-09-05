@@ -11,9 +11,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-PORT=8787
-PIDFILE=.capture.pid
-LOG=data/raw/proxy.log
+PORT="${PORT:-8787}"
+PIDFILE="${PIDFILE:-.capture.pid}"
+LOG="${LOG:-data/raw/proxy.log}"
 
 # Port guard (issue #73): start/stop must refuse a half-dead proxy rather than
 # silently record into the wrong capture. See scripts/proxy_guard.sh.
@@ -80,7 +80,14 @@ PY
     ;;
 stop)
     CAPTURE=$(cat $PIDFILE.file 2>/dev/null)
-    acl_proxy_stop || exit 1
+    acl_proxy_stop
+    rc=$?
+    # Exit 1 means the guard could not act safely (a foreign process holds the
+    # port): the capture may still be growing, so the health gate would judge a
+    # moving file. Abort without it. Exit 2 is only a warning — the proxy is
+    # already gone and nothing is writing the capture, so the health gate's
+    # verdict is trustworthy; run it and let its exit code be ours.
+    [ "$rc" -eq 1 ] && exit 1
     rm -f "$PIDFILE.file"
     echo "stopped."
     [ -z "$CAPTURE" ] && exit 0

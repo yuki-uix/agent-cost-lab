@@ -47,6 +47,51 @@ def _broke_cache(record: dict, by_response_id: dict) -> bool:
     return broke_cache(prev, record) is True
 
 
+def _lineage_collisions(rows: list[dict]) -> list[dict]:
+    """Splices inside one lineage group: a record whose message list shrank.
+
+    ``_lineage_key`` merges two conversations that share ``messages[0]`` into one
+    lineage, and is blind to the collision it causes — so the *judgement* here is
+    the message count alone. It never consults ``_lineage_key`` to ask whether two
+    records are really the same conversation (grouping uses it; the judgement
+    must not), and never reads ``injected_previous_message_id``. A real
+    conversation only appends, so a strictly shorter message list means two
+    conversations were glued together (issue #72).
+
+    The two other candidate criteria were measured and rejected, which is why this
+    is the only one implemented. Threading pointers see one connected component —
+    the proxy's ``LAST_ID`` residue chains run 2's first turn onto run 1's last —
+    so they cannot see the splice. "The successor is not an append" flags every
+    real cache break as a splice, because a break rewrites an earlier message
+    without shrinking the list; measured on the three historical captures it cut
+    exactly the known break seams. Only a *strictly shorter* count separates the
+    splice from both.
+
+    One finding per seam, in file order: ``lineage`` (first 8 chars), ``prev_i``
+    / ``curr_i`` record indices, ``prev_n`` / ``curr_n`` message counts, and
+    ``harmful`` — whether ``ledger.broke_cache`` says the seam has already
+    polluted the break count. ``broke_cache`` is called here, never re-derived;
+    see the ``_broke_cache`` docstring for the cost of the local copy.
+    """
+    lineages = collections.defaultdict(list)
+    for i, r in enumerate(rows):
+        lineages[_lineage_key(r.get("request_body", {}))].append(i)
+    findings = []
+    for key, idxs in lineages.items():
+        ordered = sorted(idxs)
+        for a, b in zip(ordered, ordered[1:]):
+            na = len((rows[a].get("request_body") or {}).get("messages") or [])
+            nb = len((rows[b].get("request_body") or {}).get("messages") or [])
+            if nb < na:
+                findings.append({
+                    "lineage": key[:8],
+                    "prev_i": a, "curr_i": b,
+                    "prev_n": na, "curr_n": nb,
+                    "harmful": broke_cache(rows[a], rows[b]) is True,
+                })
+    return findings
+
+
 def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     ok, bad = [], []
     # A list, not a slot: the two conditions below are independent and can
@@ -126,6 +171,51 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
     gate(len(threaded) >= 2,
          f"{len(threaded)} requests carried previous_message_id"
          + ("" if len(threaded) >= 2 else "  <- too short to compare anything"))
+
+    # Issue #72: two conversations that share ``messages[0]`` land in one lineage
+    # and are invisible to the cross-lineage gate above, because that gate asks
+    # ``_lineage_key`` — the very function that merged them. The independent
+    # witness is a record whose message list is strictly shorter than the
+    # previous one in the same lineage. Severity is graded by harm, not shape: a
+    # seam the ledger witnesses as a break has already corrupted the break count
+    # and voids the capture; a seam that does not break the cache is reported in
+    # the ``----`` tier (like ``undecidable``) and does not fail — the
+    # ``<transcript>`` bypass collisions in every historical capture share one
+    # ``messages[0]`` without ever shrinking, so failing on shape would condemn
+    # all three of this repo's real captures.
+    for c in _lineage_collisions(rows):
+        detail = (f"lineage {c['lineage']} splices two conversations: record "
+                  f"{c['prev_i']}->{c['curr_i']} messages {c['prev_n']}->{c['curr_n']}")
+        if c["harmful"]:
+            bad.append(detail + "  <- collision polluted the break count")
+        else:
+            undecidable.append(detail + " (seam does not break the cache)")
+
+    # Issue #73's sibling to score_injection.py's arm gate: that one asks whether
+    # a capture declares an arm at all; this one asks whether it declares *one*,
+    # and whether *every* record declares it. ``inject.apply()`` returns None
+    # when nothing is armed, so within one proxy process the ``injection`` field
+    # is either a dict on every record or None on every record. A file where some
+    # records carry an arm and some do not can only be two proxy processes
+    # writing one file — the exact #73 merge. So the gate partitions ALL records;
+    # counting only the labelled ones let a half-labelled capture pass with a
+    # single arm. Records with no arm at all (the historical captures) still do
+    # not fail the "single arm" question — that is score_injection.py's gate, not
+    # this one's — but a mix of labelled and unlabelled does.
+    declared_arms = collections.Counter(
+        r["injection"]["id"] for r in rows
+        if isinstance(r.get("injection"), dict) and "id" in r["injection"])
+    labelled = sum(declared_arms.values())
+    unlabelled = len(rows) - labelled
+    if declared_arms and unlabelled:
+        gate(False,
+             f"{labelled} records declare an arm, {unlabelled} carry none:"
+             f" {dict(declared_arms)}"
+             "  <- one arm mixed with unlabelled traffic is two proxies in one file")
+    gate(len(declared_arms) <= 1,
+         f"{len(declared_arms)} campaign arms in one capture: {dict(declared_arms)}"
+         + ("" if len(declared_arms) <= 1 else "  <- a capture must declare a single arm"))
+
     # Did upstream return a `diagnostics` key at all?
     #
     # This gate used to read `"diagnostics" in r`, which is true for every

@@ -11,11 +11,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-PORT=8787
-PIDFILE=.capture.pid
-LOG=data/raw/proxy.log
+PORT="${PORT:-8787}"
+PIDFILE="${PIDFILE:-.capture.pid}"
+LOG="${LOG:-data/raw/proxy.log}"
 
-listening() { lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; }
+# Port guard (issue #73): start/stop must refuse a half-dead proxy rather than
+# silently record into the wrong capture. See scripts/proxy_guard.sh.
+source "$(dirname "$0")/proxy_guard.sh"
 
 # The capture file does not exist until the first request lands, so a bare
 # `wc -l < "$f"` fails on its redirect before `|| echo 0` can help.
@@ -31,22 +33,10 @@ next_file() {
 
 case "${1:-start}" in
 start)
-    if listening; then
-        echo "already recording into $(cat $PIDFILE.file 2>/dev/null || echo '?')"
-        echo "run 'scripts/capture.sh status' to see it, or 'stop' to finish."
-        exit 0
-    fi
     CAPTURE=$(next_file)
     mkdir -p data/raw
-    ACL_CAPTURE="$CAPTURE" nohup "${ACL_PYTHON:-.venv/bin/python}" -m agentcostlab.proxy \
-        >"$LOG" 2>&1 &
-    echo $! >"$PIDFILE"
+    acl_proxy_start "$CAPTURE" || exit 1
     echo "$CAPTURE" >"$PIDFILE.file"
-    for _ in $(seq 40); do listening && break; sleep 0.25; done
-    if ! listening; then
-        echo "proxy did not come up; see $LOG" >&2
-        exit 1
-    fi
     echo "recording into $CAPTURE   (pid $(cat $PIDFILE), log $LOG)"
     echo
     echo "Now, in the directory you actually want to work in:"
@@ -63,7 +53,7 @@ start)
     ;;
 status)
     CAPTURE=$(cat $PIDFILE.file 2>/dev/null)
-    if ! listening; then
+    if _port_free; then
         echo "not recording."
         [ -n "$CAPTURE" ] && echo "last capture: $CAPTURE ($(count "$CAPTURE") records)"
         exit 0
@@ -90,8 +80,15 @@ PY
     ;;
 stop)
     CAPTURE=$(cat $PIDFILE.file 2>/dev/null)
-    [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null
-    rm -f "$PIDFILE" "$PIDFILE.file"
+    acl_proxy_stop
+    rc=$?
+    # Exit 1 means the guard could not act safely (a foreign process holds the
+    # port): the capture may still be growing, so the health gate would judge a
+    # moving file. Abort without it. Exit 2 is only a warning — the proxy is
+    # already gone and nothing is writing the capture, so the health gate's
+    # verdict is trustworthy; run it and let its exit code be ours.
+    [ "$rc" -eq 1 ] && exit 1
+    rm -f "$PIDFILE.file"
     echo "stopped."
     [ -z "$CAPTURE" ] && exit 0
     echo

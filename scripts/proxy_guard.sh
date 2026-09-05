@@ -9,8 +9,9 @@
 #   acl_proxy_start <capture-file>   refuse to start on an occupied port, start
 #                                    the proxy, then confirm the listener is the
 #                                    PID we just started (not a stale one)
-#   acl_proxy_stop                   kill the recorded PID, then wait until the
-#                                    port is actually released before returning
+#   acl_proxy_stop                   confirm the recorded PID is the listener,
+#                                    then kill it and wait until the port is
+#                                    actually released before returning
 #
 # Both return non-zero and print the reason to stderr on failure, so a caller
 # running under `set -e` aborts the whole capture rather than recording into
@@ -46,16 +47,51 @@ acl_proxy_start() {
         _listener_pid | grep -qx "$pid" && return 0
         sleep 0.25
     done
+
+    # Failed start: nothing we wrote has been verified, so leave none of it
+    # behind. The child we just launched must not survive to be mistaken for a
+    # listener by the next start/stop, and the pidfile is exactly the stale
+    # value that stop would otherwise feed on.
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 20); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.05
+    done
+    kill -9 "$pid" 2>/dev/null || true
+    rm -f "$PIDFILE"
     echo "proxy pid $pid did not take port $PORT (listener pid $(_listener_pid)); see $LOG" >&2
     return 1
 }
 
 acl_proxy_stop() {
-    local pid
+    local pid listener
     pid=$(cat "$PIDFILE" 2>/dev/null || true)
-    if [ -n "$pid" ]; then
-        kill "$pid" 2>/dev/null || true
+    listener=$(_listener_pid)
+
+    # The port is the truth; the pidfile is only a cache of who we last saw own
+    # it. Acting on the stored value alone kills whichever process happens to
+    # have recycled that pid — the exact half-dead-proxy failure this guard
+    # exists to stop. Identity is taken from the port, never from the pidfile.
+    if [ -z "$pid" ]; then
+        if _port_free; then
+            rm -f "$PIDFILE"
+            return 0
+        fi
+        echo "no pidfile $PIDFILE, but port $PORT is held by pid $listener; refusing to kill an unrecorded process" >&2
+        return 1
     fi
+
+    if [ "$listener" != "$pid" ]; then
+        rm -f "$PIDFILE"
+        if _port_free; then
+            echo "pidfile $PIDFILE named pid $pid, but port $PORT is free; not killing (proxy already gone)" >&2
+        else
+            echo "pidfile $PIDFILE named pid $pid, but port $PORT is held by pid $listener; not killing" >&2
+        fi
+        return 1
+    fi
+
+    kill "$pid" 2>/dev/null || true
     rm -f "$PIDFILE"
 
     # `kill` returning is not enough: a proxy ignoring SIGTERM keeps the port,

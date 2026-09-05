@@ -497,6 +497,20 @@ def test_no_injection_field_is_not_a_campaign_arm_mismatch():
     assert not any("campaign arms" in b for b in bad), bad
 
 
+def test_partial_injection_labels_fail():
+    """A capture where some records declare an arm and others do not can only be
+    two proxy processes writing one file (#73): ``inject.apply()`` returns None
+    when nothing is armed, so within one process the field is all-or-none.
+    Counting only the labelled records would let this pass with a single arm."""
+    rows = healthy()
+    for r in rows[:3]:
+        r["injection"] = {"id": "i3", "applied": False, "detail": None, "turn": 1}
+    _, bad, _ = health.check(rows)
+    assert any("3 records declare an arm, 9 carry none" in b for b in bad), bad
+    # distinguishable from the two-arm FAIL, which this capture is not
+    assert not any("must declare a single arm" in b for b in bad), bad
+
+
 # --- the reverse defence, on the real captures (issue #72, AC3) --------------
 #
 # The three synthetic tests above show the criterion fires on a splice and stays

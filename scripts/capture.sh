@@ -19,8 +19,6 @@ LOG=data/raw/proxy.log
 # silently record into the wrong capture. See scripts/proxy_guard.sh.
 source "$(dirname "$0")/proxy_guard.sh"
 
-listening() { lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; }
-
 # The capture file does not exist until the first request lands, so a bare
 # `wc -l < "$f"` fails on its redirect before `|| echo 0` can help.
 count() { [ -f "$1" ] && wc -l <"$1" | tr -d ' ' || echo 0; }
@@ -55,7 +53,7 @@ start)
     ;;
 status)
     CAPTURE=$(cat $PIDFILE.file 2>/dev/null)
-    if ! listening; then
+    if _port_free; then
         echo "not recording."
         [ -n "$CAPTURE" ] && echo "last capture: $CAPTURE ($(count "$CAPTURE") records)"
         exit 0

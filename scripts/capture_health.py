@@ -192,14 +192,26 @@ def check(rows: list[dict]) -> tuple[list[str], list[str], dict]:
             undecidable.append(detail + " (seam does not break the cache)")
 
     # Issue #73's sibling to score_injection.py's arm gate: that one asks whether
-    # a capture declares an arm at all; this one asks whether it declares *one*.
-    # Two arms in one capture means two runs got merged (the same file that #72
-    # describes), so a capture must name a single ``injection.id``. Records with
-    # no ``injection`` field (all historical captures) do not participate and do
-    # not fail here — that is score_injection.py's gate, not this one's.
+    # a capture declares an arm at all; this one asks whether it declares *one*,
+    # and whether *every* record declares it. ``inject.apply()`` returns None
+    # when nothing is armed, so within one proxy process the ``injection`` field
+    # is either a dict on every record or None on every record. A file where some
+    # records carry an arm and some do not can only be two proxy processes
+    # writing one file — the exact #73 merge. So the gate partitions ALL records;
+    # counting only the labelled ones let a half-labelled capture pass with a
+    # single arm. Records with no arm at all (the historical captures) still do
+    # not fail the "single arm" question — that is score_injection.py's gate, not
+    # this one's — but a mix of labelled and unlabelled does.
     declared_arms = collections.Counter(
         r["injection"]["id"] for r in rows
         if isinstance(r.get("injection"), dict) and "id" in r["injection"])
+    labelled = sum(declared_arms.values())
+    unlabelled = len(rows) - labelled
+    if declared_arms and unlabelled:
+        gate(False,
+             f"{labelled} records declare an arm, {unlabelled} carry none:"
+             f" {dict(declared_arms)}"
+             "  <- one arm mixed with unlabelled traffic is two proxies in one file")
     gate(len(declared_arms) <= 1,
          f"{len(declared_arms)} campaign arms in one capture: {dict(declared_arms)}"
          + ("" if len(declared_arms) <= 1 else "  <- a capture must declare a single arm"))
